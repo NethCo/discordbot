@@ -68,16 +68,13 @@ async function getUserCharacters(discordId) {
 // ─── Watch for approvals/rejections from website ──────────────────────────────
 function watchHandledRequests() {
   db.collection("pendingCharacters")
-    .where("status", "in", ["approved", "rejected"])
     .onSnapshot(async (snap) => {
       for (const change of snap.docChanges()) {
         if (change.type !== "modified") continue;
 
-        const req   = change.data();
-        const reqId = change.doc.id;
-
-        // רק אם טופל מהאתר (לא מהבוט)
+        const req = change.data();
         if (!req.adminMessageId || req.botHandled) continue;
+        if (req.status !== "approved" && req.status !== "rejected") continue;
 
         try {
           const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
@@ -87,7 +84,7 @@ function watchHandledRequests() {
           const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
             .setColor(isApproved ? 0x22c55e : 0xef4444)
             .setTitle(isApproved ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
-            .addFields({ name: isApproved ? "אושר על ידי" : "נדחה על ידי", value: `אתר האדמין` });
+            .addFields({ name: isApproved ? "אושר על ידי" : "נדחה על ידי", value: "אתר האדמין" });
 
           await msg.edit({ embeds: [updatedEmbed], components: [] });
           await change.doc.ref.update({ botHandled: true });
@@ -287,7 +284,8 @@ client.on("messageCreate", async (message) => {
           new ButtonBuilder().setCustomId(`reject_${reqDoc.id}`).setLabel("❌ דחה").setStyle(ButtonStyle.Danger),
         );
 
-        await adminChannel.send({ embeds: [adminEmbed], components: [row] });
+        const adminMsg = await adminChannel.send({ embeds: [adminEmbed], components: [row] });
+          await reqDoc.ref.update({ adminMessageId: adminMsg.id });
       } catch (err) {
         console.error("❌ שליחה לצ'אנל אדמין נכשלה:", err.message);
       }
