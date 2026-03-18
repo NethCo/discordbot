@@ -18,13 +18,13 @@ admin.initializeApp({
   storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
 });
 const db      = admin.firestore();
-const bucket  = admin.storage().bucket();
+const bucket  = admin.storage().bucket();;
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 const DISCORD_TOKEN          = process.env.DISCORD_TOKEN;
 const LEADERBOARD_CHANNEL_ID = process.env.LEADERBOARD_CHANNEL_ID;
 const ADMIN_CHANNEL_ID       = process.env.ADMIN_CHANNEL_ID;
-const WEBSITE_RANKINGS_URL   = process.env.WEBSITE_RANKINGS_URL || "https://your-site.com/rankings";
+const WEBSITE_RANKINGS_URL   = process.env.WEBSITE_RANKINGS_URL
 const UPDATE_INTERVAL_HOURS  = 3;
 
 // ─── Discord Client ────────────────────────────────────────────────────────────
@@ -65,7 +65,38 @@ async function getUserCharacters(discordId) {
     .sort((a, b) => b.level !== a.level ? b.level - a.level : (b.exp || 0) - (a.exp || 0));
   return chars.length ? chars : null;
 }
+// ─── Watch for approvals/rejections from website ──────────────────────────────
+function watchHandledRequests() {
+  db.collection("pendingCharacters")
+    .where("status", "in", ["approved", "rejected"])
+    .onSnapshot(async (snap) => {
+      for (const change of snap.docChanges()) {
+        if (change.type !== "modified") continue;
 
+        const req   = change.data();
+        const reqId = change.doc.id;
+
+        // רק אם טופל מהאתר (לא מהבוט)
+        if (!req.adminMessageId || req.botHandled) continue;
+
+        try {
+          const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
+          const msg = await adminChannel.messages.fetch(req.adminMessageId);
+
+          const isApproved = req.status === "approved";
+          const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
+            .setColor(isApproved ? 0x22c55e : 0xef4444)
+            .setTitle(isApproved ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
+            .addFields({ name: isApproved ? "אושר על ידי" : "נדחה על ידי", value: `אתר האדמין` });
+
+          await msg.edit({ embeds: [updatedEmbed], components: [] });
+          await change.doc.ref.update({ botHandled: true });
+        } catch (err) {
+          console.error("❌ עדכון הודעת אדמין נכשל:", err.message);
+        }
+      }
+    });
+}
 // ─── Download buffer from URL ──────────────────────────────────────────────────
 function downloadBuffer(url) {
   return new Promise((resolve, reject) => {
@@ -211,7 +242,7 @@ client.on("messageCreate", async (message) => {
 
     const imgBuffer  = await downloadBuffer(attachment.url);
     const ext        = attachment.contentType === "image/png" ? "png" : attachment.contentType === "image/webp" ? "webp" : "jpg";
-    const storagePath = `verifications/${reqDoc.id}/screenshot.${ext}`;
+    const storagePath = `verifications/${reqDoc.id}.${ext}`;
     const fileRef    = bucket.file(storagePath);
 
     await fileRef.save(imgBuffer, {
@@ -332,54 +363,48 @@ client.on("interactionCreate", async (interaction) => {
 
     try { await interaction.deferUpdate(); } catch { return; }
 
-    const reqRef  = db.collection("pendingCharacters").doc(reqId);
-    const reqSnap = await reqRef.get();
-
+    const reqSnap = await db.collection("pendingCharacters").doc(reqId).get();
     if (!reqSnap.exists) {
       return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
     }
-
-    const req = reqSnap.data();
-    if (req.status !== "pending") {
+    if (reqSnap.data().status !== "pending") {
       return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
     }
 
-    if (isApprove) {
-      // צור דמות
-      const charRef = await db.collection("characters").add({
-        name: req.charName, world: req.world, job: req.job || "",
-        user: req.uid, level: 1, fame: 0, exp: 0, createdAt: new Date(),
-      });
-      // הוסף ל-characterIds
-      await db.collection("users").doc(req.uid).update({
-        characterIds: admin.firestore.FieldValue.arrayUnion(charRef.id),
-      });
-      await reqRef.update({ status: "approved", handledBy: interaction.user.id, handledAt: new Date() });
+    const fnName = isApprove ? "approveCharacter" : "rejectCharacter";
+    const fnUrl  = `${process.env.FIREBASE_FUNCTIONS_URL}/${fnName}`;
 
-      const approvedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-        .setColor(0x22c55e)
-        .setTitle("✅ בקשת דמות — אושרה")
-        .addFields({ name: "אושר על ידי", value: `<@${interaction.user.id}>` });
-      await interaction.editReply({ embeds: [approvedEmbed], components: [] });
+    const result = await fetch(fnUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: { reqId, handledBy: interaction.user.id } }),
+    });
 
-      try {
-        const u = await client.users.fetch(req.discordId);
-        await u.send(`✅ הדמות **${req.charName}** אושרה ונוספה לחשבון שלך באתר MSC Israel!`);
-      } catch {}
-    } else {
-      await reqRef.update({ status: "rejected", handledBy: interaction.user.id, handledAt: new Date() });
-
-      const rejectedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-        .setColor(0xef4444)
-        .setTitle("❌ בקשת דמות — נדחתה")
-        .addFields({ name: "נדחה על ידי", value: `<@${interaction.user.id}>` });
-      await interaction.editReply({ embeds: [rejectedEmbed], components: [] });
-
-      try {
-        const u = await client.users.fetch(req.discordId);
-        await u.send(`❌ הבקשה לדמות **${req.charName}** נדחתה. פנה למנהל לפרטים נוספים.`);
-      } catch {}
+    if (!result.ok) {
+      const err = await result.json();
+      if (err?.error?.message === "already handled") {
+        return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
+      }
+      throw new Error(err?.error?.message || "unknown error");
     }
+
+    // עדכן את ההודעה בדיסקורד
+    const req = reqSnap.data();
+    const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+      .setColor(isApprove ? 0x22c55e : 0xef4444)
+      .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
+      .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: `<@${interaction.user.id}>` });
+    await interaction.editReply({ embeds: [updatedEmbed], components: [] });
+
+    // שלח DM למשתמש
+    try {
+      const u = await client.users.fetch(req.discordId);
+      await u.send(isApprove
+        ? `✅ הדמות **${req.charName}** אושרה ונוספה לחשבון שלך באתר MSC Israel!`
+        : `❌ הבקשה לדמות **${req.charName}** נדחתה. פנה למנהל לפרטים נוספים.`
+      );
+    } catch {}
+
     return;
   }
 });
@@ -390,6 +415,7 @@ client.once("ready", async () => {
   await updateLeaderboard();
   setInterval(updateLeaderboard, UPDATE_INTERVAL_HOURS * 60 * 60 * 1000);
   watchPendingCharacters();
+  watchHandledRequests();
 });
 
 client.login(DISCORD_TOKEN);
