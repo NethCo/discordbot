@@ -1,0 +1,81 @@
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { db } = require("./firebase");
+const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL, UPDATE_INTERVAL_HOURS, worldIcon, jobIcon } = require("./config");
+
+async function getTop10() {
+  const snap = await db.collection("characters").orderBy("level", "desc").orderBy("exp", "desc").limit(10).get();
+  return snap.docs.map((doc, i) => ({ rank: i + 1, ...doc.data() }));
+}
+
+async function getCharacterRank(charData) {
+  const above    = await db.collection("characters").where("level", ">", charData.level || 0).get();
+  const sameMore = await db.collection("characters").where("level", "==", charData.level || 0).where("exp", ">", charData.exp || 0).get();
+  return above.size + sameMore.size + 1;
+}
+
+async function getUserCharacters(discordId) {
+  const userSnap = await db.collection("users").where("discordId", "==", discordId).limit(1).get();
+  if (userSnap.empty) return null;
+  const characterIds = userSnap.docs[0].data().characterIds || [];
+  if (!characterIds.length) return null;
+  const charDocs = await Promise.all(characterIds.map(id => db.collection("characters").doc(id).get()));
+  const chars = charDocs.filter(d => d.exists).map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => b.level !== a.level ? b.level - a.level : (b.exp || 0) - (a.exp || 0));
+  return chars.length ? chars : null;
+}
+
+function buildLeaderboardEmbed(top10) {
+  const medals = ["🥇", "🥈", "🥉"];
+  const now = new Date().toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" });
+  const rows = top10.map(c => {
+    const pos = medals[c.rank - 1] ?? `**${c.rank}.**`;
+    return `${pos} ${worldIcon(c.world)} **${c.name}** — ${c.job} — רמה \`${c.level}\``;
+  });
+  return new EmbedBuilder()
+    .setColor(0xff6600)
+    .setTitle("🍁 טופ 10 — MapleStory Community Israel")
+    .setDescription(rows.join("\n"))
+    .setFooter({ text: `עודכן: ${now} • מתעדכן כל ${UPDATE_INTERVAL_HOURS} שעות` });
+}
+
+function buildLeaderboardButtons() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("my_rank").setLabel("📊 הדירוג שלי").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setLabel("🌐 רשימה מלאה באתר").setStyle(ButtonStyle.Link).setURL(WEBSITE_RANKINGS_URL),
+  );
+}
+
+async function getLeaderboardMessageId() {
+  const doc = await db.collection("_bot").doc("leaderboard").get();
+  return doc.exists ? doc.data().messageId : null;
+}
+
+async function saveLeaderboardMessageId(id) {
+  await db.collection("_bot").doc("leaderboard").set({ messageId: id });
+}
+
+async function updateLeaderboard(client) {
+  try {
+    const channel = await client.channels.fetch(LEADERBOARD_CHANNEL_ID);
+    if (!channel) return console.error("❌ ערוץ לוח הדירוגים לא נמצא");
+    const top10   = await getTop10();
+    const embed   = buildLeaderboardEmbed(top10);
+    const row     = buildLeaderboardButtons();
+    const savedId = await getLeaderboardMessageId();
+    if (savedId) {
+      try {
+        const msg = await channel.messages.fetch(savedId);
+        await msg.edit({ embeds: [embed], components: [row] });
+        console.log("✅ לוח הדירוגים עודכן");
+        return;
+      } catch {}
+    }
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+    await saveLeaderboardMessageId(msg.id);
+    console.log("✅ נשלחה הודעת לוח דירוגים:", msg.id);
+  } catch (err) {
+    console.error("❌ שגיאה בעדכון לוח:", err);
+  }
+}
+
+module.exports = { updateLeaderboard, getCharacterRank, getUserCharacters };
