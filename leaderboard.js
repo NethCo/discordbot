@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { db } = require("./firebase");
-const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL, UPDATE_INTERVAL_HOURS, worldIcon, jobIcon } = require("./config");
+const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL, UPDATE_INTERVAL_HOURS, worldIcon} = require("./config");
 
 async function getTop10() {
   const snap = await db.collection("characters").orderBy("level", "desc").orderBy("exp", "desc").limit(10).get();

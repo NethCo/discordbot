@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { db } = require("./firebase");
-const { WEBSITE_RANKINGS_URL, FIREBASE_FUNCTIONS_URL, worldIcon, jobIcon } = require("./config");
+const { WEBSITE_RANKINGS_URL, FIREBASE_FUNCTIONS_URL, worldIcon } = require("./config");
 const { getUserCharacters, getCharacterRank } = require("./leaderboard");
 
 async function handleInteractions(client) {
@@ -19,7 +19,7 @@ async function handleInteractions(client) {
           characters.map(c =>
             new ButtonBuilder()
               .setCustomId(`rank_char_${c.id}`)
-              .setLabel(`${jobIcon(c.job)} ${c.name} (${c.level})`)
+              .setLabel(`${c.name} (${c.level})`)
               .setStyle(ButtonStyle.Secondary)
           )
         );
@@ -49,7 +49,7 @@ async function handleInteractions(client) {
             `🏆 מיקום כללי: **#${rank}**\n` +
             `⭐ רמה: **${charData.level}**\n` +
             `${worldIcon(charData.world)} עולם: **${charData.world || "—"}**\n` +
-            `${jobIcon(charData.job)} עבודה: **${charData.job || "—"}**`
+            `עבודה: **${charData.job || "—"}**`
           )
           .setFooter({ text: "MapleStory Community Israel" });
         await interaction.editReply({ embeds: [embed], components: [] });

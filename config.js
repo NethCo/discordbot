@@ -10,7 +10,7 @@ module.exports = {
   ADMIN_CHANNEL_ID:         process.env.ADMIN_CHANNEL_ID,
   WELCOME_CHANNEL_ID:       process.env.WELCOME_CHANNEL_ID,
   MEMBER_COUNT_CHANNEL_ID:  process.env.MEMBER_COUNT_CHANNEL_ID,
-  WEBSITE_RANKINGS_URL:     process.env.WEBSITE_RANKINGS_URL || "https://your-site.com/rankings",
+  WEBSITE_RANKINGS_URL:     process.env.WEBSITE_RANKINGS_URL,
   FIREBASE_FUNCTIONS_URL:   process.env.FIREBASE_FUNCTIONS_URL,
   UPDATE_INTERVAL_HOURS,
   worldIcon,
