@@ -8,9 +8,15 @@ async function getTop10() {
 }
 
 async function getCharacterRank(charData) {
-  const above    = await db.collection("characters").where("level", ">", charData.level || 0).get();
-  const sameMore = await db.collection("characters").where("level", "==", charData.level || 0).where("exp", ">", charData.exp || 0).get();
-  return above.size + sameMore.size + 1;
+  const snap = await db.collection("characters").orderBy("level", "desc").orderBy("exp", "desc").get();
+  let rank = 1;
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    if (data.level < (charData.level || 0)) return rank;
+    if (data.level === (charData.level || 0) && data.exp <= (charData.exp || 0)) return rank;
+    rank++;
+  }
+  return rank;
 }
 
 async function getUserCharacters(discordId) {
