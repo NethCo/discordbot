@@ -242,20 +242,16 @@ async function assignWorldRole(client, charDoc) {
 }
 
 function watchNewCharacters(client) {
-  // Watch recent characters (last 10) - only processes truly new ones
   db.collection("characters")
     .orderBy("createdAt", "desc")
     .limit(10)
     .onSnapshot((snap) => {
-      // Only process if this is not the initial load
-      if (!snap.metadata.fromCache || snap.docChanges().length === 0) {
-        for (const change of snap.docChanges()) {
-          if (change.type !== "added") continue;
-          // Only process if created in the last 5 minutes (avoid processing old docs on startup)
-          const createdAt = change.doc.data().createdAt;
-          if (createdAt && Date.now() - createdAt.toMillis() < 5 * 60 * 1000) {
-            assignWorldRole(client, change.doc).catch(console.error);
-          }
+      if (!snap.metadata || (!snap.metadata.fromCache && snap.docChanges().length === 0)) return;
+      for (const change of snap.docChanges()) {
+        if (change.type !== "added") continue;
+        const createdAt = change.doc.data().createdAt;
+        if (createdAt && Date.now() - createdAt.toMillis() < 5 * 60 * 1000) {
+          assignWorldRole(client, change.doc).catch(console.error);
         }
       }
     }, (error) => {
