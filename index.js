@@ -1,10 +1,11 @@
 require("dotenv").config();
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 
-const { DISCORD_TOKEN, UPDATE_INTERVAL_HOURS } = require("./config");
+const { DISCORD_TOKEN, UPDATE_INTERVAL_HOURS, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday }       = require("./holidays");
 const { updateLeaderboard }        = require("./leaderboard");
-const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = require("./verification");
+const { updateLivesMessage }       = require("./lives");
+const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests, watchNewCharacters } = require("./verification");
 const { handleInteractions }       = require("./interactions");
 const { updateMemberCountChannel, setupWelcome } = require("./welcome");
 
@@ -37,6 +38,10 @@ client.once("ready", async () => {
   await updateLeaderboard(client);
   setInterval(() => updateLeaderboard(client), UPDATE_INTERVAL_HOURS * 60 * 60 * 1000);
 
+  // לייבים
+  await updateLivesMessage(client);
+  setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
+
   // סטטוס בוט
   updateBotStatus();
   setInterval(updateBotStatus, 60 * 60 * 1000);
@@ -49,6 +54,7 @@ client.once("ready", async () => {
   watchPendingCharacters(client);
   watchDMScreenshots(client);
   watchHandledRequests(client);
+  watchNewCharacters(client);
   handleInteractions(client);
   setupWelcome(client);
 });

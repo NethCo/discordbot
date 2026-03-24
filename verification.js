@@ -1,7 +1,7 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const https = require("https");
 const { db, bucket } = require("./firebase");
-const { ADMIN_CHANNEL_ID } = require("./config");
+const { ADMIN_CHANNEL_ID, WORLD_ROLES } = require("./config");
 
 // ─── Download buffer from URL ──────────────────────────────────────────────────
 function downloadBuffer(url) {
@@ -169,4 +169,98 @@ function watchHandledRequests(client) {
     });
 }
 
-module.exports = { watchPendingCharacters, watchDMScreenshots, watchHandledRequests };
+// ─── Watch for new characters → assign world role ──────────────────────────────
+const processedCharIds = new Set();
+
+async function assignWorldRole(client, charDoc) {
+  const char = charDoc.data();
+  const charId = charDoc.id;
+  
+  console.log(`🔍 בודק דמות: ${char.name} (${char.world}) - ID: ${charId}`);
+  
+  if (!char.world || !char.user) {
+    console.log(`❌ חסר world או user לדמות ${charId}`);
+    return;
+  }
+  if (processedCharIds.has(charId)) {
+    console.log(`⏭️ דמות ${charId} כבר עובדה`);
+    return;
+  }
+  
+  const roleId = WORLD_ROLES[char.world];
+  if (!roleId) {
+    console.log(`❌ אין role מוגדר לעולם ${char.world}`);
+    return;
+  }
+  
+  try {
+    const userSnap = await db.collection("users").doc(char.user).get();
+    if (!userSnap.exists) {
+      console.log(`❌ לא נמצא משתמש ${char.user}`);
+      return;
+    }
+    const discordId = userSnap.data()?.discordId;
+    if (!discordId) {
+      console.log(`❌ למשתמש ${char.user} אין discordId`);
+      return;
+    }
+    
+    console.log(`👤 נמצא discordId: ${discordId}`);
+    
+    const guild = client.guilds.cache.first();
+    if (!guild) {
+      console.log(`❌ לא נמצא guild`);
+      return;
+    }
+    
+    let member;
+    try {
+      member = await guild.members.fetch(discordId);
+    } catch (e) {
+      console.log(`❌ לא נמצא member ב-guild: ${discordId}`);
+      return;
+    }
+    
+    const role = guild.roles.cache.get(roleId);
+    if (!role) { 
+      console.error(`❌ Role not found for ${char.world} - roleId: ${roleId}`); 
+      return; 
+    }
+    
+    if (member.roles.cache.has(roleId)) {
+      console.log(`ℹ️ ${member.user.tag} already has ${char.world} role`);
+      processedCharIds.add(charId);
+      return;
+    }
+    
+    await member.roles.add(role);
+    processedCharIds.add(charId);
+    console.log(`✅ הוסף role ${char.world} ל-${member.user.tag}`);
+  } catch (err) {
+    console.error(`❌ שגיאה בהוספת role:`, err.message);
+  }
+}
+
+function watchNewCharacters(client) {
+  // Watch recent characters (last 10) - only processes truly new ones
+  db.collection("characters")
+    .orderBy("createdAt", "desc")
+    .limit(10)
+    .onSnapshot((snap) => {
+      // Only process if this is not the initial load
+      if (!snap.metadata.fromCache || snap.docChanges().length === 0) {
+        for (const change of snap.docChanges()) {
+          if (change.type !== "added") continue;
+          // Only process if created in the last 5 minutes (avoid processing old docs on startup)
+          const createdAt = change.doc.data().createdAt;
+          if (createdAt && Date.now() - createdAt.toMillis() < 5 * 60 * 1000) {
+            assignWorldRole(client, change.doc).catch(console.error);
+          }
+        }
+      }
+    }, (error) => {
+      console.error("❌ Firestore listener error:", error);
+    });
+}
+
+module.exports = { watchPendingCharacters, watchDMScreenshots, watchHandledRequests, watchNewCharacters };

@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { db } = require("./firebase");
-const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL, UPDATE_INTERVAL_HOURS, worldIcon} = require("./config");
+const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL, UPDATE_INTERVAL_HOURS } = require("./config");
 
 async function getTop10() {
   const snap = await db.collection("characters").orderBy("level", "desc").orderBy("exp", "desc").limit(10).get();
@@ -33,9 +33,16 @@ async function getUserCharacters(discordId) {
 function buildLeaderboardEmbed(top10) {
   const medals = ["🥇", "🥈", "🥉"];
   const now = new Date().toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" });
+  if (!top10.length) {
+    return new EmbedBuilder()
+      .setColor(0xff6600)
+      .setTitle("🍁 טופ 10 — MapleStory Community Israel")
+      .setDescription("אין דמויות בדירוג עדיין")
+      .setFooter({ text: `עודכן: ${now} • מתעדכן כל ${UPDATE_INTERVAL_HOURS} שעות` });
+  }
   const rows = top10.map(c => {
     const pos = medals[c.rank - 1] ?? `**${c.rank}.**`;
-    return `${pos} ${worldIcon(c.world)} **${c.name}** — ${c.job} — רמה \`${c.level}\``;
+    return `${pos} **${c.name}** — ${c.job} — רמה \`${c.level}\``;
   });
   return new EmbedBuilder()
     .setColor(0xff6600)

@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { db } = require("./firebase");
-const { WEBSITE_RANKINGS_URL, FIREBASE_FUNCTIONS_URL, worldIcon } = require("./config");
+const { WEBSITE_RANKINGS_URL, FIREBASE_FUNCTIONS_URL } = require("./config");
 const { getUserCharacters, getCharacterRank } = require("./leaderboard");
 
 async function handleInteractions(client) {
@@ -48,7 +48,7 @@ async function handleInteractions(client) {
             `🍁 **${charData.name}**\n\n` +
             `🏆 מיקום כללי: **#${rank}**\n` +
             `⭐ רמה: **${charData.level}**\n` +
-            `${worldIcon(charData.world)} עולם: **${charData.world || "—"}**\n` +
+            `עולם: **${charData.world || "—"}**\n` +
             `עבודה: **${charData.job || "—"}**`
           )
           .setFooter({ text: "MapleStory Community Israel" });

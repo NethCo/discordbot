@@ -9,7 +9,7 @@ async function updateMemberCountChannel(client) {
     if (!channel) return;
     await channel.guild.members.fetch();
     const count   = channel.guild.members.cache.filter(m => !m.user.bot).size;
-    const newName = `👪 משתמשים ${count}`;
+    const newName = `👪 ${count} משתמשים`;
     if (channel.name !== newName) {
       await channel.setName(newName);
       console.log(`✅ ערוץ חברים עודכן: ${newName}`);
@@ -48,6 +48,10 @@ function setupWelcome(client) {
     } catch (err) {
       console.error("❌ שגיאה בהודעת ברוך הבא:", err.message);
     }
+  });
+
+  client.on("guildMemberRemove", async () => {
+    await updateMemberCountChannel(client);
   });
 }
 
