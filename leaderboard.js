@@ -20,14 +20,19 @@ async function getCharacterRank(charData) {
 }
 
 async function getUserCharacters(discordId) {
+  // אין דרך ישירה להגיע ל-uid מ-Discord ID בלי mapping;
+  // לכן מחפשים users לפי discordId ואז משתמשים ב-characterIds.
   const userSnap = await db.collection("users").where("discordId", "==", discordId).limit(1).get();
-  if (userSnap.empty) return null;
+  if (userSnap.empty) return { status: "no_account", characters: [] };
+
   const characterIds = userSnap.docs[0].data().characterIds || [];
-  if (!characterIds.length) return null;
-  const charDocs = await Promise.all(characterIds.map(id => db.collection("characters").doc(id).get()));
+  if (!characterIds.length) return { status: "no_characters", characters: [] };
+
+  const refs = characterIds.map(id => db.collection("characters").doc(id));
+  const charDocs = await db.getAll(...refs);
   const chars = charDocs.filter(d => d.exists).map(d => ({ id: d.id, ...d.data() }))
     .sort((a, b) => b.level !== a.level ? b.level - a.level : (b.exp || 0) - (a.exp || 0));
-  return chars.length ? chars : null;
+  return { status: chars.length ? "ok" : "no_characters", characters: chars };
 }
 
 function buildLeaderboardEmbed(top10) {

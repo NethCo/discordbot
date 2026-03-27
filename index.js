@@ -2,7 +2,7 @@ require("dotenv").config();
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 
 const { DISCORD_TOKEN, UPDATE_INTERVAL_HOURS, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
-const { getCurrentHoliday }       = require("./holidays");
+const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
 const { updateLeaderboard }        = require("./leaderboard");
 const { updateLivesMessage }       = require("./lives");
 const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests, watchNewCharacters } = require("./verification");
@@ -24,9 +24,10 @@ const client = new Client({
 // ─── Bot Status ────────────────────────────────────────────────────────────────
 function updateBotStatus() {
   const holiday = getCurrentHoliday();
+  const shabbat = getShabbatStatus();
   const status  = holiday
     ? holiday.status
-    : "🍁 MapleStory Israel Community";
+    : (shabbat || "🍁 MapleStory Israel Community");
   client.user.setActivity(status, { type: 4 });
 }
 

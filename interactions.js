@@ -3,6 +3,25 @@ const { db } = require("./firebase");
 const { WEBSITE_RANKINGS_URL, FIREBASE_FUNCTIONS_URL } = require("./config");
 const { getUserCharacters, getCharacterRank } = require("./leaderboard");
 
+const rankSelectionCache = new Map();
+
+function saveUserRankCache(discordId, characters) {
+  rankSelectionCache.set(discordId, {
+    expiresAt: Date.now() + 2 * 60 * 1000,
+    byId: new Map(characters.map(c => [c.id, c])),
+  });
+}
+
+function getUserRankCache(discordId, charId) {
+  const cache = rankSelectionCache.get(discordId);
+  if (!cache) return null;
+  if (Date.now() > cache.expiresAt) {
+    rankSelectionCache.delete(discordId);
+    return null;
+  }
+  return cache.byId.get(charId) || null;
+}
+
 async function handleInteractions(client) {
   client.on("interactionCreate", async (interaction) => {
     if (!interaction.isButton()) return;
@@ -11,10 +30,15 @@ async function handleInteractions(client) {
     if (interaction.customId === "my_rank") {
       try { await interaction.deferReply({ flags: 64 }); } catch { return; }
       try {
-        const characters = await getUserCharacters(interaction.user.id);
-        if (!characters) {
+        const result = await getUserCharacters(interaction.user.id);
+        if (result.status === "no_account") {
           return interaction.editReply({ content: `❌ לא מצאתי חשבון מקושר. היכנס לאתר: **${WEBSITE_RANKINGS_URL}**` });
         }
+        if (result.status === "no_characters") {
+          return interaction.editReply({ content: "❌ נמצא חשבון מקושר, אך אין בו דמויות עדיין." });
+        }
+        const characters = result.characters;
+        saveUserRankCache(interaction.user.id, characters);
         const row = new ActionRowBuilder().addComponents(
           characters.map(c =>
             new ButtonBuilder()
@@ -36,10 +60,20 @@ async function handleInteractions(client) {
     if (interaction.customId.startsWith("rank_char_")) {
       try { await interaction.deferReply({ flags: 64 }); } catch { return; }
       try {
-        const charId  = interaction.customId.replace("rank_char_", "");
-        const charDoc = await db.collection("characters").doc(charId).get();
-        if (!charDoc.exists) return interaction.editReply({ content: "❌ דמות לא נמצאה." });
-        const charData = charDoc.data();
+        const charId = interaction.customId.replace("rank_char_", "");
+        let charData = getUserRankCache(interaction.user.id, charId);
+
+        if (!charData) {
+          const result = await getUserCharacters(interaction.user.id);
+          if (result.status !== "ok") {
+            return interaction.editReply({ content: "❌ לא מצאתי דמויות מקושרות לחשבון שלך." });
+          }
+          saveUserRankCache(interaction.user.id, result.characters);
+          charData = result.characters.find(c => c.id === charId) || null;
+        }
+
+        if (!charData) return interaction.editReply({ content: "❌ דמות לא נמצאה." });
+
         const rank     = await getCharacterRank(charData);
         const embed = new EmbedBuilder()
           .setColor(0x00ccff)
