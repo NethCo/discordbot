@@ -172,6 +172,20 @@ function watchHandledRequests(client) {
 // ─── Watch for new characters → assign world role ──────────────────────────────
 const processedCharIds = new Set();
 
+function getWorldRoleId(world) {
+  const key = String(world || "").trim();
+  if (!key) return null;
+  if (WORLD_ROLES[key]) return WORLD_ROLES[key];
+
+  const lower = key.toLowerCase();
+  if (lower === "kronis") return WORLD_ROLES.Kronos || null;
+  if (lower === "kronos") return WORLD_ROLES.Kronos || null;
+  if (lower === "hyperion") return WORLD_ROLES.Hyperion || null;
+  if (lower === "scania") return WORLD_ROLES.Scania || null;
+  if (lower === "bera") return WORLD_ROLES.Bera || null;
+  return null;
+}
+
 async function assignWorldRole(client, charDoc) {
   const char = charDoc.data();
   const charId = charDoc.id;
@@ -187,7 +201,7 @@ async function assignWorldRole(client, charDoc) {
     return;
   }
   
-  const roleId = WORLD_ROLES[char.world];
+  const roleId = getWorldRoleId(char.world);
   if (!roleId) {
     console.log(`❌ אין role מוגדר לעולם ${char.world}`);
     return;
@@ -246,11 +260,12 @@ function watchNewCharacters(client) {
     .orderBy("createdAt", "desc")
     .limit(10)
     .onSnapshot((snap) => {
-      if (!snap.metadata || (!snap.metadata.fromCache && snap.docChanges().length === 0)) return;
+      if (!snap.docChanges().length) return;
       for (const change of snap.docChanges()) {
         if (change.type !== "added") continue;
         const createdAt = change.doc.data().createdAt;
-        if (createdAt && Date.now() - createdAt.toMillis() < 5 * 60 * 1000) {
+        const createdAtMs = typeof createdAt?.toMillis === "function" ? createdAt.toMillis() : 0;
+        if (createdAtMs && Date.now() - createdAtMs < 5 * 60 * 1000) {
           assignWorldRole(client, change.doc).catch(console.error);
         }
       }

@@ -102,40 +102,50 @@ async function handleInteractions(client) {
 
       try { await interaction.deferUpdate(); } catch { return; }
 
-      const reqSnap = await db.collection("pendingCharacters").doc(reqId).get();
-      if (!reqSnap.exists) return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
-      if (reqSnap.data().status !== "pending") return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
-
-      const fnName = isApprove ? "approveCharacter" : "rejectCharacter";
-      const fnUrl  = `${FIREBASE_FUNCTIONS_URL}/${fnName}`;
-
-      const result = await fetch(fnUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: { reqId, handledBy: interaction.user.id } }),
-      });
-
-      if (!result.ok) {
-        const err = await result.json();
-        if (err?.error?.message === "already handled") return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
-        throw new Error(err?.error?.message || "unknown error");
-      }
-
-      const req = reqSnap.data();
-      const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-        .setColor(isApprove ? 0x22c55e : 0xef4444)
-        .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
-        .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: `<@${interaction.user.id}>` });
-      await interaction.editReply({ embeds: [updatedEmbed], components: [] });
-      await db.collection("pendingCharacters").doc(reqId).update({ botHandled: true });
-
       try {
-        const u = await client.users.fetch(req.discordId);
-        await u.send(isApprove
-          ? `✅ הדמות **${req.charName}** אושרה ונוספה לחשבון שלך באתר MSC Israel!`
-          : `❌ הבקשה לדמות **${req.charName}** נדחתה. פנה למנהל לפרטים נוספים.`
-        );
-      } catch {}
+        const reqSnap = await db.collection("pendingCharacters").doc(reqId).get();
+        if (!reqSnap.exists) return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
+        if (reqSnap.data().status !== "pending") return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
+
+        if (!FIREBASE_FUNCTIONS_URL) {
+          console.error("❌ FIREBASE_FUNCTIONS_URL לא מוגדר");
+          return interaction.followUp({ content: "❌ חסר FIREBASE_FUNCTIONS_URL בהגדרות השרת.", ephemeral: true });
+        }
+
+        const fnName = isApprove ? "approveCharacter" : "rejectCharacter";
+        const fnUrl  = `${FIREBASE_FUNCTIONS_URL.replace(/\/$/, "")}/${fnName}`;
+
+        const result = await fetch(fnUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: { reqId, handledBy: interaction.user.id } }),
+        });
+
+        if (!result.ok) {
+          const err = await result.json().catch(() => null);
+          if (err?.error?.message === "already handled") return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
+          throw new Error(err?.error?.message || `HTTP ${result.status}`);
+        }
+
+        const req = reqSnap.data();
+        const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+          .setColor(isApprove ? 0x22c55e : 0xef4444)
+          .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
+          .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: `<@${interaction.user.id}>` });
+        await interaction.editReply({ embeds: [updatedEmbed], components: [] });
+        await db.collection("pendingCharacters").doc(reqId).update({ botHandled: true });
+
+        try {
+          const u = await client.users.fetch(req.discordId);
+          await u.send(isApprove
+            ? `✅ הדמות **${req.charName}** אושרה ונוספה לחשבון שלך באתר MSC Israel!`
+            : `❌ הבקשה לדמות **${req.charName}** נדחתה. פנה למנהל לפרטים נוספים.`
+          );
+        } catch {}
+      } catch (err) {
+        console.error("שגיאה ב-approve/reject:", err);
+        await interaction.followUp({ content: "❌ לא הצלחתי לטפל בבקשה כרגע. בדוק את הגדרות השרת.", ephemeral: true }).catch(() => {});
+      }
       return;
     }
   });
