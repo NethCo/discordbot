@@ -1,5 +1,5 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
-const { db } = require("./firebase");
+const { admin, db } = require("./firebase");
 const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL, UPDATE_INTERVAL_HOURS } = require("./config");
 
 async function getTop10() {
@@ -64,18 +64,37 @@ function buildLeaderboardButtons() {
 }
 
 async function getLeaderboardMessageId() {
-  const doc = await db.collection("_bot").doc("leaderboard").get();
-  return doc.exists ? doc.data().messageId : null;
+  const syncDoc = await db.collection("_bot").doc("syncStatus").get();
+  if (syncDoc.exists && syncDoc.data()?.leaderboardMessageId) {
+    return syncDoc.data().leaderboardMessageId;
+  }
+  // backward compatibility
+  const legacyDoc = await db.collection("_bot").doc("leaderboard").get();
+  return legacyDoc.exists ? legacyDoc.data().messageId : null;
 }
 
 async function saveLeaderboardMessageId(id) {
-  await db.collection("_bot").doc("leaderboard").set({ messageId: id });
+  await db.collection("_bot").doc("syncStatus").set({ leaderboardMessageId: id }, { merge: true });
+}
+
+async function writeRankingsSyncStatus(status, extra = {}) {
+  await db.collection("_bot").doc("syncStatus").set({
+    rankingsLastSyncSource: "discordbot.leaderboard",
+    rankingsLastSyncResult: status,
+    rankingsLastSyncAt: status === "ok" ? admin.firestore.FieldValue.serverTimestamp() : undefined,
+    rankingsLastAttemptAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...extra,
+  }, { merge: true });
 }
 
 async function updateLeaderboard(client) {
   try {
     const channel = await client.channels.fetch(LEADERBOARD_CHANNEL_ID);
-    if (!channel) return console.error("❌ ערוץ לוח הדירוגים לא נמצא");
+    if (!channel) {
+      console.error("❌ ערוץ לוח הדירוגים לא נמצא");
+      await writeRankingsSyncStatus("channel-not-found");
+      return;
+    }
     const top10   = await getTop10();
     const embed   = buildLeaderboardEmbed(top10);
     const row     = buildLeaderboardButtons();
@@ -84,15 +103,20 @@ async function updateLeaderboard(client) {
       try {
         const msg = await channel.messages.fetch(savedId);
         await msg.edit({ embeds: [embed], components: [row] });
+        await writeRankingsSyncStatus("ok", { topCount: top10.length });
         console.log("✅ לוח הדירוגים עודכן");
         return;
       } catch {}
     }
     const msg = await channel.send({ embeds: [embed], components: [row] });
     await saveLeaderboardMessageId(msg.id);
+    await writeRankingsSyncStatus("ok", { topCount: top10.length });
     console.log("✅ נשלחה הודעת לוח דירוגים:", msg.id);
   } catch (err) {
     console.error("❌ שגיאה בעדכון לוח:", err);
+    try {
+      await writeRankingsSyncStatus("error", { rankingsLastSyncError: String(err?.message || err) });
+    } catch {}
   }
 }
 
