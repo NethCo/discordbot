@@ -31,6 +31,35 @@ function updateBotStatus() {
   client.user.setActivity(status, { type: 4 });
 }
 
+function msUntilNextIsraelMidnight() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jerusalem",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+
+  const byType = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  const currentIsrael = new Date(`${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}Z`);
+  const nextIsraelMidnight = new Date(currentIsrael);
+  nextIsraelMidnight.setUTCDate(nextIsraelMidnight.getUTCDate() + 1);
+  nextIsraelMidnight.setUTCHours(0, 0, 5, 0);
+  return Math.max(1_000, nextIsraelMidnight.getTime() - currentIsrael.getTime());
+}
+
+function scheduleDailyStatusRefresh() {
+  const waitMs = msUntilNextIsraelMidnight();
+  setTimeout(() => {
+    updateBotStatus();
+    scheduleDailyStatusRefresh();
+  }, waitMs);
+}
+
 // ─── Ready ─────────────────────────────────────────────────────────────────────
 client.once("ready", async () => {
   console.log(`✅ בוט מחובר כ: ${client.user.tag}`);
@@ -45,7 +74,7 @@ client.once("ready", async () => {
 
   // סטטוס בוט
   updateBotStatus();
-  setInterval(updateBotStatus, 60 * 60 * 1000);
+  scheduleDailyStatusRefresh();
 
   // ספירת חברים
   await updateMemberCountChannel(client);
