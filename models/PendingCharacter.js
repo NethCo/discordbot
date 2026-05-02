@@ -7,19 +7,16 @@ const pendingCharacterSchema = new mongoose.Schema({
   user: String,
   job: String,
   verificationCode: String,
-  status: { type: String, default: "pending_verification" },
+  isApproved: { type: Boolean, default: null },
   dmSent: { type: Boolean, default: false },
-  screenshotFileId: String,
-  screenshotPath: String,
   screenshotUrl: String,
   screenshotUploadedAt: Date,
-  adminMessageId: String,
   botHandled: { type: Boolean, default: false },
   handledBy: String,
   handledAt: Date,
-}, { timestamps: true });
+}, { timestamps: true, versionKey: false });
 
-pendingCharacterSchema.index({ status: 1 });
-pendingCharacterSchema.index({ discordId: 1, status: 1 });
+pendingCharacterSchema.index({ isApproved: 1 });
+pendingCharacterSchema.index({ discordId: 1, isApproved: 1 });
 
 module.exports = mongoose.model("PendingCharacter", pendingCharacterSchema);

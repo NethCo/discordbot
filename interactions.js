@@ -145,7 +145,7 @@ async function handleInteractions(client) {
       try {
         const req = await PendingCharacter.findById(reqId);
         if (!req) return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
-        if (req.status !== "pending") return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
+        if (req.isApproved !== null) return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
 
         if (isApprove) {
           const safeCharName = String(req.charName || "").trim();
@@ -191,7 +191,7 @@ async function handleInteractions(client) {
           }
         }
 
-        req.status = isApprove ? "approved" : "rejected";
+        req.isApproved = isApprove;
         req.handledBy = interaction.user.id;
         req.handledAt = new Date();
         await req.save();

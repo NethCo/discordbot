@@ -62,7 +62,7 @@ function watchPendingCharacters(client) {
   setInterval(async () => {
     try {
       const docs = await PendingCharacter.find({
-        status: "pending_verification",
+        isApproved: null,
         dmSent: { $ne: true },
       }).lean();
 
@@ -87,7 +87,7 @@ function watchDMScreenshots(client) {
     const discordId = message.author.id;
     const req = await PendingCharacter.findOne({
       discordId,
-      status: "pending_verification",
+      isApproved: null,
       dmSent: true,
     });
 
@@ -105,6 +105,7 @@ function watchDMScreenshots(client) {
     try {
       await message.reply("⏳ מעלה את התמונה לבדיקה...");
       const imgBuffer = await downloadBuffer(attachment.url);
+      const ext = attachment.contentType === "image/png" ? "png" : attachment.contentType === "image/webp" ? "webp" : "jpg";
 
       if (!ADMIN_CHANNEL_ID) {
         await message.reply("❌ שגיאה: ערוץ האדמין לא מוגדר.");
@@ -112,44 +113,40 @@ function watchDMScreenshots(client) {
       }
 
       const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
+
+      const adminEmbed = new EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle("📋 בקשת דמות חדשה לאישור")
+        .addFields(
+          { name: "דמות",      value: req.charName,                  inline: true },
+          { name: "עולם",      value: req.world,                     inline: true },
+          { name: "משתמש",     value: `<@${discordId}>`,             inline: true },
+          { name: "קוד אימות", value: `\`${req.verificationCode}\``, inline: true },
+        )
+        .setTimestamp();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`approve_${req._id}`).setLabel("✅ אשר").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`reject_${req._id}`).setLabel("❌ דחה").setStyle(ButtonStyle.Danger),
+      );
+
       const adminMsg = await adminChannel.send({
-        content: `📸 **${req.charName}** (${req.world}) — <@${discordId}>`,
-        files: [{ attachment: imgBuffer, name: `screenshot.${attachment.contentType === "image/png" ? "png" : attachment.contentType === "image/webp" ? "webp" : "jpg"}` }],
+        embeds: [adminEmbed],
+        components: [row],
+        files: [{ attachment: imgBuffer, name: `screenshot.${ext}` }],
       });
 
-      const discordImageUrl = adminMsg.attachments.first()?.url;
+      await adminMsg.edit({
+        embeds: [adminEmbed.setImage(adminMsg.attachments.first()?.url)],
+        components: [row],
+      });
 
       await PendingCharacter.findByIdAndUpdate(req._id, {
-        status: "pending",
-        screenshotFileId: adminMsg.id,
-        screenshotUrl: discordImageUrl || null,
+        screenshotUrl: adminMsg.attachments.first()?.url || null,
         screenshotUploadedAt: new Date(),
-        adminMessageId: adminMsg.id,
       });
 
       await message.reply(`✅ התמונה התקבלה! הבקשה לדמות **${req.charName}** ממתינה לאישור מנהל.`);
-
-      if (discordImageUrl) {
-        const adminEmbed = new EmbedBuilder()
-          .setColor(0xf59e0b)
-          .setTitle("📋 בקשת דמות חדשה לאישור")
-          .addFields(
-            { name: "דמות",      value: req.charName,                  inline: true },
-            { name: "עולם",      value: req.world,                     inline: true },
-            { name: "משתמש",     value: `<@${discordId}>`,             inline: true },
-            { name: "קוד אימות", value: `\`${req.verificationCode}\``, inline: true },
-          )
-          .setImage(discordImageUrl)
-          .setTimestamp();
-
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`approve_${req._id}`).setLabel("✅ אשר").setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(`reject_${req._id}`).setLabel("❌ דחה").setStyle(ButtonStyle.Danger),
-        );
-
-        const followUpMsg = await adminChannel.send({ embeds: [adminEmbed], components: [row] });
-        await adminMsg.edit({ content: `📸 **${req.charName}** (${req.world}) — <@${discordId}>\n[אישור/דחייה]`, components: [row] });
-      }
     } catch (err) {
       console.error("❌ שגיאה בהעלאת Screenshot:", err.message);
       await message.reply("❌ שגיאה בהעלאת התמונה. נסה שוב.");
@@ -158,47 +155,34 @@ function watchDMScreenshots(client) {
 }
 
 function watchHandledRequests(client) {
-  let initialized = false;
-  const adminMessageCache = new Map();
+  const seenIds = new Set();
 
   setInterval(async () => {
     try {
       const docs = await PendingCharacter.find({
-        status: { $in: ["approved", "rejected"] },
+        isApproved: { $ne: null },
         botHandled: { $ne: true },
       }).lean();
 
       for (const doc of docs) {
         const idStr = doc._id.toString();
+        if (seenIds.has(idStr)) continue;
         if (!ADMIN_CHANNEL_ID) continue;
 
         const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
-        let msg;
-
-        if (doc.adminMessageId) {
-          msg = adminMessageCache.get(idStr);
-          if (!msg) {
-            try {
-              msg = await adminChannel.messages.fetch(doc.adminMessageId);
-              adminMessageCache.set(idStr, msg);
-            } catch {
-              const messages = await adminChannel.messages.fetch({ limit: 50 });
-              msg = messages.find(m =>
-                m.components?.[0]?.components?.some(btn =>
-                  btn.customId === `approve_${idStr}` || btn.customId === `reject_${idStr}`
-                )
-              );
-              if (msg) adminMessageCache.set(idStr, msg);
-            }
-          }
-        }
+        const messages = await adminChannel.messages.fetch({ limit: 50 });
+        const msg = messages.find(m =>
+          m.components?.[0]?.components?.some(btn =>
+            btn.customId === `approve_${idStr}` || btn.customId === `reject_${idStr}`
+          )
+        );
 
         if (!msg) {
           console.log("❌ הודעה לא נמצאה עבור", idStr);
           continue;
         }
 
-        const isApproved = doc.status === "approved";
+        const isApproved = doc.isApproved === true;
         const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
           .setColor(isApproved ? 0x22c55e : 0xef4444)
           .setTitle(isApproved ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
@@ -206,10 +190,9 @@ function watchHandledRequests(client) {
 
         await msg.edit({ embeds: [updatedEmbed], components: [] });
         await PendingCharacter.findByIdAndUpdate(idStr, { botHandled: true });
+        seenIds.add(idStr);
         console.log("✅ הודעת אדמין עודכנה עבור", idStr);
       }
-
-      initialized = true;
     } catch (err) {
       console.error("❌ שגיאה ב-watchHandledRequests:", err.message);
     }
