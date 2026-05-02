@@ -10,6 +10,6 @@ const botSyncSchema = new mongoose.Schema({
   rankingsLastAttemptAt: Date,
   rankingsLastSyncError: String,
   topCount: Number,
-}, { timestamps: true });
+}, { timestamps: true, versionKey: false });
 
 module.exports = mongoose.model("BotSync", botSyncSchema);

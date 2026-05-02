@@ -102,7 +102,6 @@ client.once("ready", async () => {
   await updateLivesMessage(client);
   setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
 
-  updateBotStatus();
   scheduleDailyStatusRefresh();
 
   await updateMemberCountChannel(client);

@@ -131,14 +131,9 @@ function watchDMScreenshots(client) {
       );
 
       const adminMsg = await adminChannel.send({
-        embeds: [adminEmbed],
+        embeds: [adminEmbed.setImage(`attachment://screenshot.${ext}`)],
         components: [row],
         files: [{ attachment: imgBuffer, name: `screenshot.${ext}` }],
-      });
-
-      await adminMsg.edit({
-        embeds: [adminEmbed.setImage(adminMsg.attachments.first()?.url)],
-        components: [row],
       });
 
       await PendingCharacter.findByIdAndUpdate(req._id, {
@@ -161,7 +156,6 @@ function watchHandledRequests(client) {
     try {
       const docs = await PendingCharacter.find({
         isApproved: { $ne: null },
-        botHandled: { $ne: true },
       }).lean();
 
       for (const doc of docs) {
@@ -178,7 +172,7 @@ function watchHandledRequests(client) {
         );
 
         if (!msg) {
-          console.log("❌ הודעה לא נמצאה עבור", idStr);
+          seenIds.add(idStr);
           continue;
         }
 
@@ -189,7 +183,6 @@ function watchHandledRequests(client) {
           .addFields({ name: isApproved ? "אושר על ידי" : "נדחה על ידי", value: "אתר האדמין" });
 
         await msg.edit({ embeds: [updatedEmbed], components: [] });
-        await PendingCharacter.findByIdAndUpdate(idStr, { botHandled: true });
         seenIds.add(idStr);
         console.log("✅ הודעת אדמין עודכנה עבור", idStr);
       }

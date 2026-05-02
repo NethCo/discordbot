@@ -5,13 +5,11 @@ const pendingCharacterSchema = new mongoose.Schema({
   charName: String,
   world: String,
   user: String,
-  job: String,
   verificationCode: String,
   isApproved: { type: Boolean, default: null },
   dmSent: { type: Boolean, default: false },
   screenshotUrl: String,
   screenshotUploadedAt: Date,
-  botHandled: { type: Boolean, default: false },
   handledBy: String,
   handledAt: Date,
 }, { timestamps: true, versionKey: false });

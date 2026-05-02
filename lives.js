@@ -13,11 +13,18 @@ async function fetchLiveStreams(logins) {
         "Client-Id": TWITCH_CLIENT_ID,
       },
     });
+    if (!res.ok) {
+      console.warn(`⚠️ Twitch API responded with ${res.status}`);
+      return {};
+    }
     const data = await res.json();
     const map = {};
     (data.data || []).forEach(s => { map[s.user_login.toLowerCase()] = s; });
     return map;
-  } catch { return {}; }
+  } catch (err) {
+    console.error("❌ שגיאה ב-Twitch API:", err.message);
+    return {};
+  }
 }
 
 async function getApprovedStreamers() {
@@ -26,11 +33,11 @@ async function getApprovedStreamers() {
 
 async function getLivesMessageId() {
   const doc = await BotSync.findById("lives").lean();
-  return doc?.messageId || null;
+  return doc?.livesMessageId || null;
 }
 
 async function saveLivesMessageId(id) {
-  await BotSync.findByIdAndUpdate("lives", { messageId: id }, { upsert: true });
+  await BotSync.findByIdAndUpdate("lives", { livesMessageId: id }, { upsert: true });
 }
 
 async function updateLivesMessage(client) {
@@ -102,7 +109,7 @@ async function updateLivesMessage(client) {
     await saveLivesMessageId(msg.id);
     console.log("✅ נשלחה הודעת לייבים:", msg.id);
   } catch (err) {
-    console.error("❌ שגיאה בעדכון לייבים:", err);
+    console.error("❌ שגיאה בעדכון לייבים:", err.stack || err.message);
   }
 }
 
