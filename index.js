@@ -1,5 +1,6 @@
 require("dotenv").config();
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
+const { connectDB } = require("./db");
 
 const { DISCORD_TOKEN, UPDATE_INTERVAL_HOURS, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
@@ -9,7 +10,6 @@ const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests, watchN
 const { handleInteractions }       = require("./interactions");
 const { updateMemberCountChannel, setupWelcome } = require("./welcome");
 
-// ─── Discord Client ────────────────────────────────────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -21,7 +21,6 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message],
 });
 
-// ─── Bot Status ────────────────────────────────────────────────────────────────
 function updateBotStatus() {
   const holiday = getCurrentHoliday();
   const shabbat = getShabbatStatus();
@@ -60,27 +59,23 @@ function scheduleDailyStatusRefresh() {
   }, waitMs);
 }
 
-// ─── Ready ─────────────────────────────────────────────────────────────────────
 client.once("ready", async () => {
   console.log(`✅ בוט מחובר כ: ${client.user.tag}`);
 
-  // לוח דירוגים
+  await connectDB();
+
   await updateLeaderboard(client);
   setInterval(() => updateLeaderboard(client), UPDATE_INTERVAL_HOURS * 60 * 60 * 1000);
 
-  // לייבים
   await updateLivesMessage(client);
   setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
 
-  // סטטוס בוט
   updateBotStatus();
   scheduleDailyStatusRefresh();
 
-  // ספירת חברים
   await updateMemberCountChannel(client);
   setInterval(() => updateMemberCountChannel(client), 60 * 60 * 1000);
 
-  // Listeners
   watchPendingCharacters(client);
   watchDMScreenshots(client);
   watchHandledRequests(client);

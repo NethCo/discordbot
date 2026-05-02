@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require("discord.js");
-const { db } = require("./firebase");
+const Streamer = require("./models/Streamer");
+const BotSync = require("./models/BotSync");
 const { LIVES_CHANNEL_ID, TWITCH_CLIENT_ID, TWITCH_APP_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 
 async function fetchLiveStreams(logins) {
@@ -20,17 +21,16 @@ async function fetchLiveStreams(logins) {
 }
 
 async function getApprovedStreamers() {
-  const snap = await db.collection("streamers").where("approved", "==", true).get();
-  return snap.docs.map(d => ({ docId: d.id, ...d.data() }));
+  return await Streamer.find({ approved: true }).lean();
 }
 
 async function getLivesMessageId() {
-  const doc = await db.collection("_bot").doc("lives").get();
-  return doc.exists ? doc.data().messageId : null;
+  const doc = await BotSync.findById("lives").lean();
+  return doc?.messageId || null;
 }
 
 async function saveLivesMessageId(id) {
-  await db.collection("_bot").doc("lives").set({ messageId: id });
+  await BotSync.findByIdAndUpdate("lives", { messageId: id }, { upsert: true });
 }
 
 async function updateLivesMessage(client) {

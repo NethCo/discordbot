@@ -1,38 +1,35 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
-const { admin, db } = require("./firebase");
+const Character = require("./models/Character");
+const User = require("./models/User");
+const BotSync = require("./models/BotSync");
 const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL, UPDATE_INTERVAL_HOURS } = require("./config");
 
 async function getTop10() {
-  const snap = await db.collection("characters").orderBy("level", "desc").orderBy("exp", "desc").limit(10).get();
-  return snap.docs.map((doc, i) => ({ rank: i + 1, ...doc.data() }));
+  const docs = await Character.find().sort({ level: -1, exp: -1 }).limit(10).lean();
+  return docs.map((doc, i) => ({ rank: i + 1, id: doc._id.toString(), ...doc }));
 }
 
 async function getCharacterRank(charData) {
-  const snap = await db.collection("characters").orderBy("level", "desc").orderBy("exp", "desc").get();
-  let rank = 1;
-  for (const doc of snap.docs) {
-    const data = doc.data();
-    if (data.level < (charData.level || 0)) return rank;
-    if (data.level === (charData.level || 0) && data.exp <= (charData.exp || 0)) return rank;
-    rank++;
-  }
-  return rank;
+  const count = await Character.countDocuments({
+    $or: [
+      { level: { $gt: charData.level || 0 } },
+      { level: charData.level || 0, exp: { $lte: charData.exp || 0 } },
+    ],
+  });
+  return count + 1;
 }
 
 async function getUserCharacters(discordId) {
-  // אין דרך ישירה להגיע ל-uid מ-Discord ID בלי mapping;
-  // לכן מחפשים users לפי discordId ואז משתמשים ב-characterIds.
-  const userSnap = await db.collection("users").where("discordId", "==", discordId).limit(1).get();
-  if (userSnap.empty) return { status: "no_account", characters: [] };
+  const user = await User.findOne({ discordId }).lean();
+  if (!user) return { status: "no_account", characters: [] };
 
-  const characterIds = userSnap.docs[0].data().characterIds || [];
+  const characterIds = user.characterIds || [];
   if (!characterIds.length) return { status: "no_characters", characters: [] };
 
-  const refs = characterIds.map(id => db.collection("characters").doc(id));
-  const charDocs = await db.getAll(...refs);
-  const chars = charDocs.filter(d => d.exists).map(d => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => b.level !== a.level ? b.level - a.level : (b.exp || 0) - (a.exp || 0));
-  return { status: chars.length ? "ok" : "no_characters", characters: chars };
+  const chars = await Character.find({ _id: { $in: characterIds } }).lean();
+  chars.sort((a, b) => b.level !== a.level ? b.level - a.level : (b.exp || 0) - (a.exp || 0));
+  const result = chars.map(c => ({ id: c._id.toString(), ...c }));
+  return { status: result.length ? "ok" : "no_characters", characters: result };
 }
 
 function buildLeaderboardEmbed(top10) {
@@ -64,27 +61,27 @@ function buildLeaderboardButtons() {
 }
 
 async function getLeaderboardMessageId() {
-  const syncDoc = await db.collection("_bot").doc("syncStatus").get();
-  if (syncDoc.exists && syncDoc.data()?.leaderboardMessageId) {
-    return syncDoc.data().leaderboardMessageId;
+  const syncDoc = await BotSync.findById("syncStatus").lean();
+  if (syncDoc?.leaderboardMessageId) {
+    return syncDoc.leaderboardMessageId;
   }
-  // backward compatibility
-  const legacyDoc = await db.collection("_bot").doc("leaderboard").get();
-  return legacyDoc.exists ? legacyDoc.data().messageId : null;
+  const legacyDoc = await BotSync.findById("leaderboard").lean();
+  return legacyDoc?.messageId || null;
 }
 
 async function saveLeaderboardMessageId(id) {
-  await db.collection("_bot").doc("syncStatus").set({ leaderboardMessageId: id }, { merge: true });
+  await BotSync.findByIdAndUpdate("syncStatus", { leaderboardMessageId: id }, { upsert: true });
 }
 
 async function writeRankingsSyncStatus(status, extra = {}) {
-  await db.collection("_bot").doc("syncStatus").set({
+  const update = {
     rankingsLastSyncSource: "discordbot.leaderboard",
     rankingsLastSyncResult: status,
-    rankingsLastSyncAt: status === "ok" ? admin.firestore.FieldValue.serverTimestamp() : undefined,
-    rankingsLastAttemptAt: admin.firestore.FieldValue.serverTimestamp(),
+    rankingsLastSyncAt: status === "ok" ? new Date() : undefined,
+    rankingsLastAttemptAt: new Date(),
     ...extra,
-  }, { merge: true });
+  };
+  await BotSync.findByIdAndUpdate("syncStatus", update, { upsert: true });
 }
 
 async function updateLeaderboard(client) {

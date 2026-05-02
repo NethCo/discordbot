@@ -1,7 +1,9 @@
 const { EmbedBuilder } = require("discord.js");
 const { WELCOME_CHANNEL_ID, MEMBER_COUNT_CHANNEL_ID, WEBSITE_URL } = require("./config");
 const { getCurrentHoliday } = require("./holidays");
-const { db } = require("./firebase");
+const User = require("./models/User");
+const Character = require("./models/Character");
+const PendingHebrewName = require("./models/PendingHebrewName");
 
 const HEBREW_NAME_REGEX = /^[\u0590-\u05FF][\u0590-\u05FF\s'"׳״-]{1,19}$/;
 const userNicknameState = new Map();
@@ -38,20 +40,17 @@ function formatFooterDate(date = new Date()) {
 }
 
 async function getUserByDiscordId(discordId) {
-  const snap = await db.collection("users").where("discordId", "==", discordId).limit(1).get();
-  if (snap.empty) return null;
-  const doc = snap.docs[0];
-  return { id: doc.id, data: doc.data() };
+  const user = await User.findOne({ discordId }).lean();
+  if (!user) return null;
+  return { id: user._id.toString(), data: user };
 }
 
 async function resolveHebrewName(discordId, userData) {
   if (isValidHebrewName(userData?.hebrewName || "")) {
     return normalizeHebrewName(userData.hebrewName);
   }
-  const pendingSnap = await db.collection("pendingHebrewNames").doc(discordId).get();
-  if (!pendingSnap.exists) return null;
-  const pending = pendingSnap.data();
-  if (pending?.status !== "done") return null;
+  const pending = await PendingHebrewName.findById(discordId).lean();
+  if (!pending || pending.status !== "done") return null;
   if (!isValidHebrewName(pending?.hebrewName || "")) return null;
   return normalizeHebrewName(pending.hebrewName);
 }
@@ -62,10 +61,10 @@ async function syncMemberNickname(client, userDocId, userData) {
   const hebrewName = await resolveHebrewName(userData.discordId, userData);
   if (!hebrewName) return false;
 
-  const mainCharSnap = await db.collection("characters").doc(userData.mainCharacterId).get();
-  if (!mainCharSnap.exists) return false;
+  const mainChar = await Character.findById(userData.mainCharacterId).lean();
+  if (!mainChar) return false;
 
-  const mainCharName = (mainCharSnap.data()?.name || "").trim();
+  const mainCharName = (mainChar.name || "").trim();
   if (!mainCharName) return false;
 
   const guild = client.guilds.cache.first();
@@ -81,18 +80,18 @@ async function syncMemberNickname(client, userDocId, userData) {
   await member.setNickname(targetNickname, "Sync main character + Hebrew name");
 
   if (userDocId) {
-    await db.collection("users").doc(userDocId).set({ hebrewName }, { merge: true });
+    await User.findByIdAndUpdate(userDocId, { hebrewName });
   }
   return true;
 }
 
 async function startHebrewNameOnboarding(member) {
   if (member.user.bot) return;
-  await db.collection("pendingHebrewNames").doc(member.id).set({
-    guildId: member.guild.id,
-    status: "pending",
-    createdAt: new Date(),
-  }, { merge: true });
+  await PendingHebrewName.findByIdAndUpdate(
+    member.id,
+    { guildId: member.guild.id, status: "pending", createdAt: new Date() },
+    { upsert: true }
+  );
 
   try {
     await member.send(
@@ -108,31 +107,30 @@ async function startHebrewNameOnboarding(member) {
 function watchNicknameSync(client) {
   let initialized = false;
 
-  db.collection("users").onSnapshot(async (snap) => {
-    for (const change of snap.docChanges()) {
-      if (change.type === "removed") {
-        userNicknameState.delete(change.doc.id);
-        continue;
+  setInterval(async () => {
+    try {
+      const users = await User.find({ discordId: { $exists: true, $ne: null } }).lean();
+
+      for (const user of users) {
+        const userDocId = user._id.toString();
+        const state = `${user.discordId || ""}|${user.mainCharacterId || ""}|${user.hebrewName || ""}`;
+        const prev = userNicknameState.get(userDocId);
+        userNicknameState.set(userDocId, state);
+
+        if (!initialized) continue;
+        if (prev === state) continue;
+
+        try {
+          await syncMemberNickname(client, userDocId, user);
+        } catch (err) {
+          console.error("❌ שגיאה בסנכרון כינוי:", err.message);
+        }
       }
-
-      const userData = change.doc.data();
-      const state = `${userData.discordId || ""}|${userData.mainCharacterId || ""}|${userData.hebrewName || ""}`;
-      const prev = userNicknameState.get(change.doc.id);
-      userNicknameState.set(change.doc.id, state);
-
-      if (!initialized) continue;
-      if (prev === state) continue;
-
-      try {
-        await syncMemberNickname(client, change.doc.id, userData);
-      } catch (err) {
-        console.error("❌ שגיאה בסנכרון כינוי:", err.message);
-      }
+      initialized = true;
+    } catch (err) {
+      console.error("❌ שגיאה ב-watchNicknameSync:", err.message);
     }
-    initialized = true;
-  }, (err) => {
-    console.error("❌ שגיאה ב-listener של users:", err.message);
-  });
+  }, 30_000);
 }
 
 async function updateMemberCountChannel(client) {
@@ -197,12 +195,8 @@ function setupWelcome(client) {
     if (!content) return;
 
     try {
-      const pendingRef = db.collection("pendingHebrewNames").doc(message.author.id);
-      const pendingSnap = await pendingRef.get();
-      if (!pendingSnap.exists) return;
-
-      const pending = pendingSnap.data();
-      if (pending.status === "done") return;
+      const pending = await PendingHebrewName.findById(message.author.id);
+      if (!pending || pending.status === "done") return;
 
       if (!isValidHebrewName(content)) {
         await message.reply("❌ השם חייב להיות בעברית בלבד (2-20 תווים). נסה שוב, למשל: נתנאל");
@@ -225,26 +219,26 @@ function setupWelcome(client) {
       const userRef = await getUserByDiscordId(message.author.id);
       if (!userRef) {
         await message.reply("✅ השם נשמר. חבר את חשבון הדיסקורד באתר כדי לעדכן כינוי אוטומטית.");
-        await pendingRef.set({
+        await PendingHebrewName.findByIdAndUpdate(message.author.id, {
           status: "done",
           hebrewName,
           updatedAt: new Date(),
-        }, { merge: true });
+        });
         return;
       }
 
-      await db.collection("users").doc(userRef.id).set({ hebrewName }, { merge: true });
+      await User.findByIdAndUpdate(userRef.id, { hebrewName });
       await syncMemberNickname(client, userRef.id, { ...userRef.data, hebrewName });
 
       const refreshedMember = await guild.members.fetch(message.author.id).catch(() => null);
       const nickname = refreshedMember?.nickname || member.nickname || member.user.username;
 
-      await pendingRef.set({
+      await PendingHebrewName.findByIdAndUpdate(message.author.id, {
         status: "done",
         hebrewName,
         nickname,
         updatedAt: new Date(),
-      }, { merge: true });
+      });
 
       await message.reply(`✅ הושלם! הכינוי שלך עודכן ל: **${nickname}**`);
     } catch (err) {

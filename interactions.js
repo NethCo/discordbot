@@ -1,9 +1,19 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
-const { db } = require("./firebase");
-const { WEBSITE_RANKINGS_URL, FIREBASE_FUNCTIONS_URL } = require("./config");
+const PendingCharacter = require("./models/PendingCharacter");
+const Character = require("./models/Character");
+const User = require("./models/User");
+const { WEBSITE_RANKINGS_URL } = require("./config");
 const { getUserCharacters, getCharacterRank } = require("./leaderboard");
 
 const rankSelectionCache = new Map();
+
+const ALLOWED_WORLDS = new Set(["Scania", "Bera", "Kronos", "Hyperion"]);
+const NEXON_BASE = "https://www.nexon.com/api/maplestory/no-auth/ranking/v2/na";
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  "Referer": "https://www.nexon.com/maplestory/rankings/north-america/overall-ranking/legendary",
+  "Accept": "application/json",
+};
 
 function saveUserRankCache(discordId, characters) {
   rankSelectionCache.set(discordId, {
@@ -22,11 +32,43 @@ function getUserRankCache(discordId, charId) {
   return cache.byId.get(charId) || null;
 }
 
+async function fetchOverall(characterName) {
+  for (const rebootIndex of [0, 1]) {
+    const url = `${NEXON_BASE}?type=overall&id=legendary&reboot_index=${rebootIndex}&page_index=1&character_name=${encodeURIComponent(characterName)}`;
+    try {
+      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const match = json?.ranks?.[0];
+      if (match) return {
+        level: match.level ?? 0,
+        exp: match.exp ?? 0,
+        imageUrl: match.characterImgURL ?? null,
+        job: match.jobName ?? "",
+      };
+    } catch {}
+  }
+  return null;
+}
+
+async function fetchFame(characterName) {
+  for (const rebootIndex of [0, 1]) {
+    const url = `${NEXON_BASE}?type=fame&id=legendary&reboot_index=${rebootIndex}&page_index=1&character_name=${encodeURIComponent(characterName)}`;
+    try {
+      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const match = json?.ranks?.[0];
+      if (match) return { fame: match.exp ?? 0 };
+    } catch {}
+  }
+  return null;
+}
+
 async function handleInteractions(client) {
   client.on("interactionCreate", async (interaction) => {
     if (!interaction.isButton()) return;
 
-    // ── הדירוג שלי ───────────────────────────────────────────────────────────
     if (interaction.customId === "my_rank") {
       try { await interaction.deferReply({ flags: 64 }); } catch { return; }
       try {
@@ -56,7 +98,6 @@ async function handleInteractions(client) {
       return;
     }
 
-    // ── בחירת דמות לדירוג ────────────────────────────────────────────────────
     if (interaction.customId.startsWith("rank_char_")) {
       try { await interaction.deferReply({ flags: 64 }); } catch { return; }
       try {
@@ -74,7 +115,7 @@ async function handleInteractions(client) {
 
         if (!charData) return interaction.editReply({ content: "❌ דמות לא נמצאה." });
 
-        const rank     = await getCharacterRank(charData);
+        const rank = await getCharacterRank(charData);
         const embed = new EmbedBuilder()
           .setColor(0x00ccff)
           .setTitle("📊 הדירוג שלך")
@@ -95,7 +136,6 @@ async function handleInteractions(client) {
       return;
     }
 
-    // ── אשר / דחה בקשת דמות ─────────────────────────────────────────────────
     if (interaction.customId.startsWith("approve_") || interaction.customId.startsWith("reject_")) {
       const isApprove = interaction.customId.startsWith("approve_");
       const reqId     = interaction.customId.replace(isApprove ? "approve_" : "reject_", "");
@@ -103,37 +143,63 @@ async function handleInteractions(client) {
       try { await interaction.deferUpdate(); } catch { return; }
 
       try {
-        const reqSnap = await db.collection("pendingCharacters").doc(reqId).get();
-        if (!reqSnap.exists) return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
-        if (reqSnap.data().status !== "pending") return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
+        const req = await PendingCharacter.findById(reqId);
+        if (!req) return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
+        if (req.status !== "pending") return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
 
-        if (!FIREBASE_FUNCTIONS_URL) {
-          console.error("❌ FIREBASE_FUNCTIONS_URL לא מוגדר");
-          return interaction.followUp({ content: "❌ חסר FIREBASE_FUNCTIONS_URL בהגדרות השרת.", ephemeral: true });
+        if (isApprove) {
+          const safeCharName = String(req.charName || "").trim();
+          const safeWorld = String(req.world || "").trim();
+          if (!safeCharName || safeCharName.length > 12) {
+            throw new Error("invalid character name length");
+          }
+          if (!ALLOWED_WORLDS.has(safeWorld)) {
+            throw new Error("invalid world");
+          }
+
+          const [overall, fameData] = await Promise.all([
+            fetchOverall(safeCharName),
+            fetchFame(safeCharName),
+          ]);
+
+          const character = new Character({
+            name: safeCharName,
+            world: safeWorld,
+            level: overall?.level ?? 0,
+            exp: overall?.exp ?? 0,
+            fame: fameData?.fame ?? 0,
+            imageUrl: overall?.imageUrl ?? null,
+            job: overall?.job ?? req.job ?? "",
+            user: req.user,
+            createdAt: new Date(),
+          });
+          await character.save();
+
+          if (req.user) {
+            const user = await User.findById(req.user);
+            if (user) {
+              const charIdStr = character._id.toString();
+              const currentIds = user.characterIds || [];
+              user.characterIds = [...currentIds, charIdStr];
+              if (!user.mainCharacterId && currentIds.length === 0) {
+                user.mainCharacterId = charIdStr;
+                user.lastMainCharacterChangeAt = new Date();
+              }
+              await user.save();
+            }
+          }
         }
 
-        const fnName = isApprove ? "approveCharacter" : "rejectCharacter";
-        const fnUrl  = `${FIREBASE_FUNCTIONS_URL.replace(/\/$/, "")}/${fnName}`;
+        req.status = isApprove ? "approved" : "rejected";
+        req.handledBy = interaction.user.id;
+        req.handledAt = new Date();
+        await req.save();
 
-        const result = await fetch(fnUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { reqId, handledBy: interaction.user.id } }),
-        });
-
-        if (!result.ok) {
-          const err = await result.json().catch(() => null);
-          if (err?.error?.message === "already handled") return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
-          throw new Error(err?.error?.message || `HTTP ${result.status}`);
-        }
-
-        const req = reqSnap.data();
         const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
           .setColor(isApprove ? 0x22c55e : 0xef4444)
           .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
           .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: `<@${interaction.user.id}>` });
         await interaction.editReply({ embeds: [updatedEmbed], components: [] });
-        await db.collection("pendingCharacters").doc(reqId).update({ botHandled: true });
 
         try {
           const u = await client.users.fetch(req.discordId);
@@ -144,7 +210,7 @@ async function handleInteractions(client) {
         } catch {}
       } catch (err) {
         console.error("שגיאה ב-approve/reject:", err);
-        await interaction.followUp({ content: "❌ לא הצלחתי לטפל בבקשה כרגע. בדוק את הגדרות השרת.", ephemeral: true }).catch(() => {});
+        await interaction.followUp({ content: "❌ לא הצלחתי לטפל בבקשה כרגע.", ephemeral: true }).catch(() => {});
       }
       return;
     }
