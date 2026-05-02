@@ -171,6 +171,7 @@ async function handleInteractions(client) {
             imageUrl: overall?.imageUrl ?? null,
             job: overall?.job ?? req.job ?? "",
             user: req.user,
+            userDiscordId: req.discordId || null,
             createdAt: new Date(),
           });
           await character.save();

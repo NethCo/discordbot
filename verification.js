@@ -1,9 +1,7 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const https = require("https");
-const { uploadScreenshot } = require("./gridfs");
 const PendingCharacter = require("./models/PendingCharacter");
 const Character = require("./models/Character");
-const User = require("./models/User");
 const { ADMIN_CHANNEL_ID, WORLD_ROLES } = require("./config");
 
 const processedPendingIds = new Set();
@@ -107,25 +105,31 @@ function watchDMScreenshots(client) {
     try {
       await message.reply("⏳ מעלה את התמונה לבדיקה...");
       const imgBuffer = await downloadBuffer(attachment.url);
-      const ext = attachment.contentType === "image/png" ? "png" : attachment.contentType === "image/webp" ? "webp" : "jpg";
-      const filename = `${req._id}.${ext}`;
 
-      const fileId = await uploadScreenshot(imgBuffer, filename, {
-        uploadedBy: discordId,
-        requestId: req._id.toString(),
-        charName: req.charName,
+      if (!ADMIN_CHANNEL_ID) {
+        await message.reply("❌ שגיאה: ערוץ האדמין לא מוגדר.");
+        return;
+      }
+
+      const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
+      const adminMsg = await adminChannel.send({
+        content: `📸 **${req.charName}** (${req.world}) — <@${discordId}>`,
+        files: [{ attachment: imgBuffer, name: `screenshot.${attachment.contentType === "image/png" ? "png" : attachment.contentType === "image/webp" ? "webp" : "jpg"}` }],
       });
+
+      const discordImageUrl = adminMsg.attachments.first()?.url;
 
       await PendingCharacter.findByIdAndUpdate(req._id, {
         status: "pending",
-        screenshotPath: filename,
+        screenshotFileId: adminMsg.id,
+        screenshotUrl: discordImageUrl || null,
         screenshotUploadedAt: new Date(),
+        adminMessageId: adminMsg.id,
       });
 
       await message.reply(`✅ התמונה התקבלה! הבקשה לדמות **${req.charName}** ממתינה לאישור מנהל.`);
 
-      if (ADMIN_CHANNEL_ID) {
-        const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
+      if (discordImageUrl) {
         const adminEmbed = new EmbedBuilder()
           .setColor(0xf59e0b)
           .setTitle("📋 בקשת דמות חדשה לאישור")
@@ -135,6 +139,7 @@ function watchDMScreenshots(client) {
             { name: "משתמש",     value: `<@${discordId}>`,             inline: true },
             { name: "קוד אימות", value: `\`${req.verificationCode}\``, inline: true },
           )
+          .setImage(discordImageUrl)
           .setTimestamp();
 
         const row = new ActionRowBuilder().addComponents(
@@ -142,8 +147,8 @@ function watchDMScreenshots(client) {
           new ButtonBuilder().setCustomId(`reject_${req._id}`).setLabel("❌ דחה").setStyle(ButtonStyle.Danger),
         );
 
-        const adminMsg = await adminChannel.send({ embeds: [adminEmbed], components: [row] });
-        await PendingCharacter.findByIdAndUpdate(req._id, { adminMessageId: adminMsg.id });
+        const followUpMsg = await adminChannel.send({ embeds: [adminEmbed], components: [row] });
+        await adminMsg.edit({ content: `📸 **${req.charName}** (${req.world}) — <@${discordId}>\n[אישור/דחייה]`, components: [row] });
       }
     } catch (err) {
       console.error("❌ שגיאה בהעלאת Screenshot:", err.message);
@@ -214,22 +219,19 @@ function watchHandledRequests(client) {
 async function assignWorldRole(client, char) {
   const charId = char._id.toString();
 
-  if (!char.world || !char.user) return;
+  if (!char.world || !char.userDiscordId) return;
   if (processedCharIds.has(charId)) return;
 
   const roleId = getWorldRoleId(char.world);
   if (!roleId) return;
 
   try {
-    const user = await User.findById(char.user).lean();
-    if (!user || !user.discordId) return;
-
     const guild = client.guilds.cache.first();
     if (!guild) return;
 
     let member;
     try {
-      member = await guild.members.fetch(user.discordId);
+      member = await guild.members.fetch(char.userDiscordId);
     } catch {
       return;
     }
@@ -256,7 +258,7 @@ function watchNewCharacters(client) {
       const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
       const docs = await Character.find({
         createdAt: { $gte: fiveMinAgo },
-      }).populate("user").lean();
+      }).lean();
 
       for (const doc of docs) {
         const idStr = doc._id.toString();

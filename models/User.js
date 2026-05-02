@@ -1,10 +1,12 @@
 const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema({
+  _id: { type: String, required: true },
   discordId: { type: String, index: true, unique: true, sparse: true },
-  characterIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Character" }],
+  characterIds: [String],
   hebrewName: String,
-  mainCharacterId: { type: mongoose.Schema.Types.ObjectId, ref: "Character" },
+  mainCharacterId: String,
+  lastMainCharacterChangeAt: Date,
 }, { timestamps: true });
 
 module.exports = mongoose.model("User", userSchema);

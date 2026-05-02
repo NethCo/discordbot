@@ -2,7 +2,7 @@ require("dotenv").config();
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { connectDB } = require("./db");
 
-const { DISCORD_TOKEN, UPDATE_INTERVAL_HOURS, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
+const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
 const { updateLeaderboard }        = require("./leaderboard");
 const { updateLivesMessage }       = require("./lives");
@@ -59,13 +59,45 @@ function scheduleDailyStatusRefresh() {
   }, waitMs);
 }
 
+function msUntilNextIsrael20() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jerusalem",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+
+  const byType = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  const currentIsrael = new Date(`${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}Z`);
+  const target = new Date(currentIsrael);
+  target.setUTCHours(20, 0, 0, 0);
+  if (target <= currentIsrael) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return Math.max(1_000, target.getTime() - currentIsrael.getTime());
+}
+
+function scheduleDailyLeaderboard(client) {
+  const waitMs = msUntilNextIsrael20();
+  const targetTime = new Date(Date.now() + waitMs);
+  console.log(`⏰ לוח דירוגים יעודכן ב-${targetTime.toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" })}`);
+  setTimeout(async () => {
+    await updateLeaderboard(client);
+    scheduleDailyLeaderboard(client);
+  }, waitMs);
+}
+
 client.once("ready", async () => {
   console.log(`✅ בוט מחובר כ: ${client.user.tag}`);
 
   await connectDB();
 
-  await updateLeaderboard(client);
-  setInterval(() => updateLeaderboard(client), UPDATE_INTERVAL_HOURS * 60 * 60 * 1000);
+  scheduleDailyLeaderboard(client);
 
   await updateLivesMessage(client);
   setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);

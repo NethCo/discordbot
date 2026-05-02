@@ -2,7 +2,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("
 const Character = require("./models/Character");
 const User = require("./models/User");
 const BotSync = require("./models/BotSync");
-const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL, UPDATE_INTERVAL_HOURS } = require("./config");
+const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL } = require("./config");
 
 async function getTop10() {
   const docs = await Character.find().sort({ level: -1, exp: -1 }).limit(10).lean();
@@ -40,7 +40,7 @@ function buildLeaderboardEmbed(top10) {
       .setColor(0xff6600)
       .setTitle("🍁 טופ 10 — MapleStory Community Israel")
       .setDescription("אין דמויות בדירוג עדיין")
-      .setFooter({ text: `עודכן: ${now} • מתעדכן כל ${UPDATE_INTERVAL_HOURS} שעות` });
+      .setFooter({ text: `עודכן: ${now}` });
   }
   const rows = top10.map(c => {
     const pos = medals[c.rank - 1] ?? `**${c.rank}.**`;
@@ -50,7 +50,7 @@ function buildLeaderboardEmbed(top10) {
     .setColor(0xff6600)
     .setTitle("🍁 טופ 10 — MapleStory Community Israel")
     .setDescription(rows.join("\n"))
-    .setFooter({ text: `עודכן: ${now} • מתעדכן כל ${UPDATE_INTERVAL_HOURS} שעות` });
+    .setFooter({ text: `עודכן: ${now}` });
 }
 
 function buildLeaderboardButtons() {

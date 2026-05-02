@@ -6,7 +6,10 @@ const characterSchema = new mongoose.Schema({
   job: String,
   level: { type: Number, default: 0 },
   exp: { type: Number, default: 0 },
-  user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  fame: { type: Number, default: 0 },
+  imageUrl: String,
+  user: String,
+  userDiscordId: { type: String, index: true },
 }, { timestamps: true });
 
 characterSchema.index({ level: -1, exp: -1 });
