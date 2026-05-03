@@ -115,7 +115,7 @@ function watchDMScreenshots(client) {
       );
 
       const adminMsg = await adminChannel.send({
-        embeds: [adminEmbed],
+        embeds: [adminEmbed.setImage(`attachment://screenshot.${ext}`)],
         components: [row],
         files: [{ attachment: imgBuffer, name: `screenshot.${ext}` }],
       });

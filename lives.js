@@ -28,7 +28,7 @@ async function fetchLiveStreams(logins) {
 }
 
 async function getApprovedStreamers() {
-  return await Streamer.find({ approved: true }).lean();
+  return await Streamer.find({ isApproved: true }).lean();
 }
 
 async function getLivesMessageId() {
@@ -83,7 +83,7 @@ async function updateLivesMessage(client) {
       const login = streamer.twitchLogin?.toLowerCase();
       const stream = liveData[login];
       const viewers = stream?.viewer_count?.toLocaleString() || "0";
-      const name = streamer.twitchDisplayName || streamer.displayName;
+      const name = streamer.twitchDisplayName || streamer.twitchLogin;
       const title = stream?.title || "";
       return `🔴 **[${name}](https://twitch.tv/${streamer.twitchLogin})** | ${title} | 👁 ${viewers}`;
     });
