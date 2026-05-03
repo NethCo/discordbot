@@ -9,8 +9,7 @@ const characterSchema = new mongoose.Schema({
   fame: { type: Number, default: 0 },
   imageUrl: String,
   user: String,
-  userDiscordId: { type: String, index: true },
-}, { timestamps: true });
+}, { timestamps: true, versionKey: false });
 
 characterSchema.index({ level: -1, exp: -1 });
 

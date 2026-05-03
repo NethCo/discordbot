@@ -1,11 +1,9 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const https = require("https");
 const PendingCharacter = require("./models/PendingCharacter");
-const Character = require("./models/Character");
-const { ADMIN_CHANNEL_ID, WORLD_ROLES } = require("./config");
+const { ADMIN_CHANNEL_ID } = require("./config");
 
 const processedPendingIds = new Set();
-const processedCharIds = new Set();
 
 function downloadBuffer(url) {
   return new Promise((resolve, reject) => {
@@ -16,20 +14,6 @@ function downloadBuffer(url) {
       res.on("error", reject);
     }).on("error", reject);
   });
-}
-
-function getWorldRoleId(world) {
-  const key = String(world || "").trim();
-  if (!key) return null;
-  if (WORLD_ROLES[key]) return WORLD_ROLES[key];
-
-  const lower = key.toLowerCase();
-  if (lower === "kronis") return WORLD_ROLES.Kronos || null;
-  if (lower === "kronos") return WORLD_ROLES.Kronos || null;
-  if (lower === "hyperion") return WORLD_ROLES.Hyperion || null;
-  if (lower === "scania") return WORLD_ROLES.Scania || null;
-  if (lower === "bera") return WORLD_ROLES.Bera || null;
-  return null;
 }
 
 async function sendVerificationDM(client, req) {
@@ -131,7 +115,7 @@ function watchDMScreenshots(client) {
       );
 
       const adminMsg = await adminChannel.send({
-        embeds: [adminEmbed.setImage(`attachment://screenshot.${ext}`)],
+        embeds: [adminEmbed],
         components: [row],
         files: [{ attachment: imgBuffer, name: `screenshot.${ext}` }],
       });
@@ -192,60 +176,4 @@ function watchHandledRequests(client) {
   }, 10_000);
 }
 
-async function assignWorldRole(client, char) {
-  const charId = char._id.toString();
-
-  if (!char.world || !char.userDiscordId) return;
-  if (processedCharIds.has(charId)) return;
-
-  const roleId = getWorldRoleId(char.world);
-  if (!roleId) return;
-
-  try {
-    const guild = client.guilds.cache.first();
-    if (!guild) return;
-
-    let member;
-    try {
-      member = await guild.members.fetch(char.userDiscordId);
-    } catch {
-      return;
-    }
-
-    const role = guild.roles.cache.get(roleId);
-    if (!role) return;
-
-    if (member.roles.cache.has(roleId)) {
-      processedCharIds.add(charId);
-      return;
-    }
-
-    await member.roles.add(role);
-    processedCharIds.add(charId);
-    console.log(`✅ הוסף role ${char.world} ל-${member.user.tag}`);
-  } catch (err) {
-    console.error(`❌ שגיאה בהוספת role:`, err.message);
-  }
-}
-
-function watchNewCharacters(client) {
-  setInterval(async () => {
-    try {
-      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-      const docs = await Character.find({
-        createdAt: { $gte: fiveMinAgo },
-      }).lean();
-
-      for (const doc of docs) {
-        const idStr = doc._id.toString();
-        if (processedCharIds.has(idStr)) continue;
-        processedCharIds.add(idStr);
-        await assignWorldRole(client, doc);
-      }
-    } catch (err) {
-      console.error("❌ שגיאה ב-watchNewCharacters:", err.message);
-    }
-  }, 30_000);
-}
-
-module.exports = { watchPendingCharacters, watchDMScreenshots, watchHandledRequests, watchNewCharacters };
+module.exports = { watchPendingCharacters, watchDMScreenshots, watchHandledRequests };

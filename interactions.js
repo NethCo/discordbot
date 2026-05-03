@@ -171,7 +171,6 @@ async function handleInteractions(client) {
             imageUrl: overall?.imageUrl ?? null,
             job: overall?.job ?? req.job ?? "",
             user: req.user,
-            userDiscordId: req.discordId || null,
             createdAt: new Date(),
           });
           await character.save();
@@ -181,12 +180,10 @@ async function handleInteractions(client) {
             if (user) {
               const charIdStr = character._id.toString();
               const currentIds = user.characterIds || [];
-              user.characterIds = [...currentIds, charIdStr];
-              if (!user.mainCharacterId && currentIds.length === 0) {
-                user.mainCharacterId = charIdStr;
-                user.lastMainCharacterChangeAt = new Date();
+              if (!currentIds.includes(charIdStr)) {
+                user.characterIds = [...currentIds, charIdStr];
+                await user.save();
               }
-              await user.save();
             }
           }
         }

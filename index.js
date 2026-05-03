@@ -6,7 +6,7 @@ const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
 const { updateLeaderboard }        = require("./leaderboard");
 const { updateLivesMessage }       = require("./lives");
-const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests, watchNewCharacters } = require("./verification");
+const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = require("./verification");
 const { handleInteractions }       = require("./interactions");
 const { updateMemberCountChannel, setupWelcome } = require("./welcome");
 
@@ -110,7 +110,6 @@ client.once("ready", async () => {
   watchPendingCharacters(client);
   watchDMScreenshots(client);
   watchHandledRequests(client);
-  watchNewCharacters(client);
   handleInteractions(client);
   setupWelcome(client);
 });
