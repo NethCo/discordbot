@@ -32,7 +32,7 @@ async function getUserCharacters(discordId) {
   return { status: result.length ? "ok" : "no_characters", characters: result };
 }
 
-function buildLeaderboardEmbed(top10) {
+function buildLeaderboardEmbed(top10, client) {
   const medals = ["🥇", "🥈", "🥉"];
   const now = new Date().toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" });
   if (!top10.length) {
@@ -40,17 +40,30 @@ function buildLeaderboardEmbed(top10) {
       .setColor(0xff6600)
       .setTitle("🍁 טופ 10 — MapleStory Community Israel")
       .setDescription("אין דמויות בדירוג עדיין")
-      .setFooter({ text: `עודכן: ${now}` });
+      .setFooter({ text: `MSIsrael.gg • עודכן: ${now}`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
   }
-  const rows = top10.map(c => {
-    const pos = medals[c.rank - 1] ?? `**${c.rank}.**`;
-    return `${pos} **${c.name}** — ${c.job} — רמה \`${c.level}\``;
+
+  let rankColumn = "";
+  let charColumn = "";
+  let levelColumn = "";
+
+  const lrm = "\u200E";
+  top10.forEach(c => {
+    const pos = medals[c.rank - 1] || `${c.rank}.`;
+    rankColumn += `${lrm}${pos}\n\n`;
+    charColumn += `${lrm}${c.name}\n\n`;
+    levelColumn += `${lrm}**${c.level}**\n\n`;
   });
+
   return new EmbedBuilder()
     .setColor(0xff6600)
     .setTitle("🍁 טופ 10 — MapleStory Community Israel")
-    .setDescription(rows.join("\n"))
-    .setFooter({ text: `עודכן: ${now}` });
+    .addFields(
+      { name: `${lrm}דירוג`, value: rankColumn, inline: true },
+      { name: `${lrm}דמות`, value: charColumn, inline: true },
+      { name: `${lrm}רמה`, value: levelColumn, inline: true }
+    )
+    .setFooter({ text: `MSIsrael.gg • עודכן: ${now}`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
 }
 
 function buildLeaderboardButtons() {
@@ -93,7 +106,7 @@ async function updateLeaderboard(client) {
       return;
     }
     const top10   = await getTop10();
-    const embed   = buildLeaderboardEmbed(top10);
+    const embed   = buildLeaderboardEmbed(top10, client);
     const row     = buildLeaderboardButtons();
     const savedId = await getLeaderboardMessageId();
     if (savedId) {

@@ -115,7 +115,7 @@ function watchDMScreenshots(client) {
       );
 
       const adminMsg = await adminChannel.send({
-        embeds: [adminEmbed.setImage(`attachment://screenshot.${ext}`)],
+        embeds: [adminEmbed],
         components: [row],
         files: [{ attachment: imgBuffer, name: `screenshot.${ext}` }],
       });
@@ -134,10 +134,16 @@ function watchDMScreenshots(client) {
 }
 
 function watchHandledRequests(client) {
-  const seenIds = new Set();
+  const seenIds = new Map();
+  const MAX_AGE_MS = 10 * 60 * 1000;
 
   setInterval(async () => {
     try {
+      const now = Date.now();
+      for (const [id, ts] of seenIds) {
+        if (now - ts > MAX_AGE_MS) seenIds.delete(id);
+      }
+
       const docs = await PendingCharacter.find({
         isApproved: { $ne: false },
       }).lean();
@@ -156,7 +162,7 @@ function watchHandledRequests(client) {
         );
 
         if (!msg) {
-          seenIds.add(idStr);
+          seenIds.set(idStr, Date.now());
           continue;
         }
 
@@ -170,7 +176,7 @@ function watchHandledRequests(client) {
           await msg.delete();
         }
 
-        seenIds.add(idStr);
+        seenIds.set(idStr, Date.now());
         console.log("✅ הודעת אדמין עודכנה עבור", idStr);
       }
     } catch (err) {

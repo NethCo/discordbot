@@ -99,6 +99,8 @@ client.once("ready", async () => {
 
   scheduleDailyLeaderboard(client);
 
+  await updateLeaderboard(client);
+
   await updateLivesMessage(client);
   setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
 

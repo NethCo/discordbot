@@ -8,7 +8,6 @@ module.exports = {
   MEMBER_COUNT_CHANNEL_ID:  process.env.MEMBER_COUNT_CHANNEL_ID,
   LIVES_CHANNEL_ID:         process.env.LIVES_CHANNEL_ID,
   WEBSITE_RANKINGS_URL:     process.env.WEBSITE_RANKINGS_URL,
-  TWITCH_CLIENT_ID:         process.env.TWITCH_CLIENT_ID,
-  TWITCH_APP_TOKEN:         process.env.TWITCH_APP_TOKEN,
+  SERVER_URL:               process.env.SERVER_URL,
   LIVES_UPDATE_INTERVAL_MINUTES,
 };

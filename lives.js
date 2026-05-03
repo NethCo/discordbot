@@ -1,26 +1,18 @@
 const { EmbedBuilder } = require("discord.js");
-const Streamer = require("./models/Streamer");
 const BotSync = require("./models/BotSync");
-const { LIVES_CHANNEL_ID, TWITCH_CLIENT_ID, TWITCH_APP_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
+const { LIVES_CHANNEL_ID, LIVES_UPDATE_INTERVAL_MINUTES, SERVER_URL } = require("./config");
 
 async function fetchLiveStreams(logins) {
-  if (!logins.length) return {};  
+  if (!logins.length) return {};
+  if (!SERVER_URL) return {};
   try {
-    const params = logins.map(l => "user_login=" + l).join("&");
-    const res = await fetch("https://api.twitch.tv/helix/streams?" + params, {
-      headers: {
-        "Authorization": "Bearer " + TWITCH_APP_TOKEN,
-        "Client-Id": TWITCH_CLIENT_ID,
-      },
-    });
+    const params = logins.map(l => `user_login=${l}`).join("&");
+    const res = await fetch(SERVER_URL + "/api/twitch/streams?" + params);
     if (!res.ok) {
-      console.warn(`⚠️ Twitch API responded with ${res.status}`);
+      console.warn(`⚠️ Twitch proxy responded with ${res.status}`);
       return {};
     }
-    const data = await res.json();
-    const map = {};
-    (data.data || []).forEach(s => { map[s.user_login.toLowerCase()] = s; });
-    return map;
+    return await res.json();
   } catch (err) {
     console.error("❌ שגיאה ב-Twitch API:", err.message);
     return {};
@@ -28,7 +20,16 @@ async function fetchLiveStreams(logins) {
 }
 
 async function getApprovedStreamers() {
-  return await Streamer.find({ isApproved: true }).lean();
+  if (!SERVER_URL) return [];
+  try {
+    const res = await fetch(SERVER_URL + "/api/streamers?approved=true");
+    if (!res.ok) return [];
+    const list = await res.json();
+    return Array.isArray(list) ? list : [];
+  } catch (err) {
+    console.error("❌ שגיאה בטעינת סטרימרים מהשרת:", err.message);
+    return [];
+  }
 }
 
 async function getLivesMessageId() {
@@ -77,23 +78,39 @@ async function updateLivesMessage(client) {
     }
 
     const totalViewers = liveStreamers.reduce((sum, s) => 
-      sum + (liveData[s.twitchLogin?.toLowerCase()]?.viewer_count || 0), 0);
+      sum + ((liveData[s.twitchLogin?.toLowerCase()]?.viewer_count) || 0), 0);
 
-    const lines = liveStreamers.map(streamer => {
-      const login = streamer.twitchLogin?.toLowerCase();
-      const stream = liveData[login];
-      const viewers = stream?.viewer_count?.toLocaleString() || "0";
+    // Column-based table layout
+    let streamerColumn = "";
+    let statusColumn = "";
+    let viewersColumn = "";
+
+    liveStreamers.forEach(streamer => {
       const name = streamer.twitchDisplayName || streamer.twitchLogin;
-      const title = stream?.title || "";
-      return `🔴 **[${name}](https://twitch.tv/${streamer.twitchLogin})** | ${title} | 👁 ${viewers}`;
+      const login = streamer.twitchLogin?.toLowerCase();
+      const stream = liveData[login] || {};
+      const title = stream.title || "";
+      const viewers = (stream.viewer_count || 0).toLocaleString();
+
+      // Truncate long titles to prevent alignment breaking
+      const safeTitle = title.length > 45 ? title.substring(0, 42) + "..." : title;
+
+      streamerColumn += `🔴 [${name}](https://twitch.tv/${streamer.twitchLogin})\n\n`;
+      statusColumn += `🟢 **${safeTitle}**\n\n`;
+      viewersColumn += `👁 ${viewers}\n\n`;
     });
 
     const embed = new EmbedBuilder()
       .setColor(0x9146ff)
       .setTitle("🔴 לייבים פעילים")
-      .setDescription(lines.join("\n"))
+      .addFields(
+        { name: "שדרן", value: streamerColumn, inline: true },
+        { name: "סטטוס", value: statusColumn, inline: true },
+        { name: "צופים", value: viewersColumn, inline: true }
+      )
       .setFooter({ 
-        text: `${liveStreamers.length} שידורים • ${totalViewers.toLocaleString()} צופים • עודכן: ${now}` 
+        text: `MSIsrael.gg • עודכן: ${now} • מתעדכן כל ${LIVES_UPDATE_INTERVAL_MINUTES} דקות`,
+        iconURL: client.user?.displayAvatarURL({ dynamic: true }) 
       });
 
     if (savedId) {
