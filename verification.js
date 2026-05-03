@@ -46,7 +46,7 @@ function watchPendingCharacters(client) {
   setInterval(async () => {
     try {
       const docs = await PendingCharacter.find({
-        isApproved: null,
+        isApproved: false,
         dmSent: { $ne: true },
       }).lean();
 
@@ -71,7 +71,7 @@ function watchDMScreenshots(client) {
     const discordId = message.author.id;
     const req = await PendingCharacter.findOne({
       discordId,
-      isApproved: null,
+      isApproved: false,
       dmSent: true,
     });
 
@@ -139,7 +139,7 @@ function watchHandledRequests(client) {
   setInterval(async () => {
     try {
       const docs = await PendingCharacter.find({
-        isApproved: { $ne: null },
+        isApproved: { $ne: false },
       }).lean();
 
       for (const doc of docs) {
@@ -160,13 +160,16 @@ function watchHandledRequests(client) {
           continue;
         }
 
-        const isApproved = doc.isApproved === true;
-        const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
-          .setColor(isApproved ? 0x22c55e : 0xef4444)
-          .setTitle(isApproved ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
-          .addFields({ name: isApproved ? "אושר על ידי" : "נדחה על ידי", value: "אתר האדמין" });
+        if (doc.isApproved === true) {
+          const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
+            .setColor(0x22c55e)
+            .setTitle("✅ בקשת דמות — אושרה")
+            .addFields({ name: "אושר על ידי", value: "אתר האדמין" });
+          await msg.edit({ embeds: [updatedEmbed], components: [] });
+        } else {
+          await msg.delete();
+        }
 
-        await msg.edit({ embeds: [updatedEmbed], components: [] });
         seenIds.add(idStr);
         console.log("✅ הודעת אדמין עודכנה עבור", idStr);
       }

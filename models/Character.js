@@ -8,7 +8,7 @@ const characterSchema = new mongoose.Schema({
   exp: { type: Number, default: 0 },
   fame: { type: Number, default: 0 },
   imageUrl: String,
-  user: String,
+  ownerId: String,
 }, { timestamps: true, versionKey: false });
 
 characterSchema.index({ level: -1, exp: -1 });

@@ -145,7 +145,7 @@ async function handleInteractions(client) {
       try {
         const req = await PendingCharacter.findById(reqId);
         if (!req) return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
-        if (req.isApproved !== null) return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
+        if (req.isApproved !== false) return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
 
         if (isApprove) {
           const safeCharName = String(req.charName || "").trim();
@@ -169,8 +169,8 @@ async function handleInteractions(client) {
             exp: overall?.exp ?? 0,
             fame: fameData?.fame ?? 0,
             imageUrl: overall?.imageUrl ?? null,
-            job: overall?.job ?? req.job ?? "",
-            user: req.user,
+            job: overall?.job ?? "",
+            ownerId: req.user,
             createdAt: new Date(),
           });
           await character.save();
@@ -188,7 +188,7 @@ async function handleInteractions(client) {
           }
         }
 
-        req.isApproved = isApprove;
+        req.isApproved = isApprove ? true : null;
         req.handledBy = interaction.user.id;
         req.handledAt = new Date();
         await req.save();

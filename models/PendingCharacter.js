@@ -6,7 +6,7 @@ const pendingCharacterSchema = new mongoose.Schema({
   world: String,
   user: String,
   verificationCode: String,
-  isApproved: { type: Boolean, default: null },
+  isApproved: { type: Boolean, default: false },
   dmSent: { type: Boolean, default: false },
   screenshotUrl: String,
   screenshotUploadedAt: Date,
