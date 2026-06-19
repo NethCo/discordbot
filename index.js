@@ -1,7 +1,6 @@
 require("dotenv").config();
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { connectDB } = require("./db");
-
 const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
 const { updateLeaderboard }        = require("./leaderboard");
@@ -97,21 +96,29 @@ client.once("ready", async () => {
 
   await connectDB();
 
-  scheduleDailyLeaderboard(client);
+  const db = require("mongoose");
 
-  await updateLeaderboard(client);
+  db.connection.once("open", async () => {
+    console.log("🟢 MongoDB fully ready (open event)");
 
-  await updateLivesMessage(client);
-  setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
+    scheduleDailyLeaderboard(client);
 
-  scheduleDailyStatusRefresh();
+    await updateLeaderboard(client);
 
-  await updateMemberCountChannel(client);
-  setInterval(() => updateMemberCountChannel(client), 60 * 60 * 1000);
+    await updateLivesMessage(client);
+    setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
 
-  watchPendingCharacters(client);
-  watchDMScreenshots(client);
-  watchHandledRequests(client);
+    scheduleDailyStatusRefresh();
+
+    await updateMemberCountChannel(client);
+    setInterval(() => updateMemberCountChannel(client), 60 * 60 * 1000);
+
+    // ✅ ONLY NOW start change streams
+    watchPendingCharacters(client);
+    watchDMScreenshots(client);
+    watchHandledRequests(client);
+  });
+
   handleInteractions(client);
   setupWelcome(client);
 });

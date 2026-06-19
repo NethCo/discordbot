@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 let isConnected = false;
 
 async function connectDB() {
-  if (isConnected) return mongoose.connection;
+  if (isConnected) return mongoose.connection.readyState === 1 ? mongoose.connection : null;
 
   mongoose.connection.on("connected", () => {
     console.log("✅ MongoDB connected");

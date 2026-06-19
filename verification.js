@@ -43,23 +43,38 @@ async function sendVerificationDM(client, req) {
 }
 
 function watchPendingCharacters(client) {
-  setInterval(async () => {
-    try {
-      const docs = await PendingCharacter.find({
-        isApproved: false,
-        dmSent: { $ne: true },
-      }).lean();
+  const stream = PendingCharacter.watch([], {
+    fullDocument: "updateLookup"
+  });
 
-      for (const doc of docs) {
-        const idStr = doc._id.toString();
-        if (processedPendingIds.has(idStr)) continue;
-        processedPendingIds.add(idStr);
-        await sendVerificationDM(client, doc);
-      }
+  stream.on("change", async (change) => {
+    try {
+      if (change.operationType !== "insert") return;
+
+      const doc = change.fullDocument;
+
+      if (!doc || doc.isApproved || doc.dmSent) return;
+
+      await sendVerificationDM(client, doc);
+
+      await PendingCharacter.updateOne(
+        { _id: doc._id },
+        { $set: { dmSent: true } }
+      );
+
     } catch (err) {
-      console.error("❌ שגיאה ב-watchPendingCharacters:", err.message);
+      console.error("ChangeStream error:", err);
     }
-  }, 15_000);
+  });
+
+  stream.on("error", (err) => {
+    console.error("Stream crashed:", err);
+
+    // IMPORTANT: auto-restart (Railway will not do this for you reliably)
+    setTimeout(() => watchPendingCharacters(client), 5000);
+  });
+
+  console.log("✅ Watching PendingCharacter collection");
 }
 
 function watchDMScreenshots(client) {

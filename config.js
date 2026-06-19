@@ -7,6 +7,7 @@ module.exports = {
   WELCOME_CHANNEL_ID:       process.env.WELCOME_CHANNEL_ID,
   MEMBER_COUNT_CHANNEL_ID:  process.env.MEMBER_COUNT_CHANNEL_ID,
   LIVES_CHANNEL_ID:         process.env.LIVES_CHANNEL_ID,
+  WEBSITE_URL:              process.env.WEBSITE_URL,
   WEBSITE_RANKINGS_URL:     process.env.WEBSITE_RANKINGS_URL,
   SERVER_URL:               process.env.SERVER_URL,
   LIVES_UPDATE_INTERVAL_MINUTES,
