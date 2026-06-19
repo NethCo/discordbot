@@ -17,18 +17,18 @@ function downloadBuffer(url) {
 }
 
 async function sendVerificationDM(client, req) {
-  if (req.dmSent || !req.discordId) return;
+  if (req.dmSent || !req.uid) return;
   try {
-    const discordUser = await client.users.fetch(req.discordId);
+    const discordUser = await client.users.fetch(req.uid);
     const embed = new EmbedBuilder()
       .setColor(0xd4a96a)
       .setTitle("🎮 אימות דמות — MSC Israel")
       .setDescription(
-        `קיבלנו בקשה לרשום את הדמות **${req.charName}** (${req.world}) תחת חשבונך.\n\n` +
+        `קיבלנו בקשה לרשום את הדמות **${req.name}** (${req.world}) תחת חשבונך.\n\n` +
         `כדי לאמת שהדמות שייכת לך:\n` +
-        `**1)** היכנס למשחק עם הדמות **${req.charName}**\n` +
+        `**1)** היכנס למשחק עם הדמות **${req.name}**\n` +
         `**2)** שלח הודעת צ'אט עם הקוד:\n\n` +
-        `\`\`\`${req.verificationCode}\`\`\`\n` +
+        `\`\`\`${req.code}\`\`\`\n` +
         `**3)** שלח לי **צילום מסך** של ההודעה בדיסקורד הזה 📸\n\n` +
         `⏰ תוקף: 48 שעות`
       )
@@ -36,7 +36,7 @@ async function sendVerificationDM(client, req) {
       .setTimestamp();
     await discordUser.send({ embeds: [embed] });
     await PendingCharacter.findByIdAndUpdate(req._id, { dmSent: true });
-    console.log(`✅ DM נשלח ל-${req.discordId} עבור ${req.charName}`);
+    console.log(`✅ DM נשלח ל-${req.uid} עבור ${req.name}`);
   } catch (err) {
     console.error(`❌ שליחת DM נכשלה עבור ${req._id}:`, err.message);
   }
@@ -53,7 +53,7 @@ function watchPendingCharacters(client) {
 
       const doc = change.fullDocument;
 
-      if (!doc || doc.isApproved || doc.dmSent) return;
+      if (!doc || doc.approved || doc.dmSent) return;
 
       await sendVerificationDM(client, doc);
 
@@ -85,8 +85,8 @@ function watchDMScreenshots(client) {
 
     const discordId = message.author.id;
     const req = await PendingCharacter.findOne({
-      discordId,
-      isApproved: false,
+      uid: discordId,
+      approved: false,
       dmSent: true,
     });
 
@@ -117,10 +117,10 @@ function watchDMScreenshots(client) {
         .setColor(0xf59e0b)
         .setTitle("📋 בקשת דמות חדשה לאישור")
         .addFields(
-          { name: "דמות",      value: req.charName,                  inline: true },
-          { name: "עולם",      value: req.world,                     inline: true },
-          { name: "משתמש",     value: `<@${discordId}>`,             inline: true },
-          { name: "קוד אימות", value: `\`${req.verificationCode}\``, inline: true },
+          { name: "דמות",      value: req.name,                  inline: true },
+          { name: "עולם",      value: req.world,                 inline: true },
+          { name: "משתמש",     value: `<@${req.uid}>`,           inline: true },
+          { name: "קוד אימות", value: `\`${req.code}\``, inline: true },
         )
         .setTimestamp();
 
@@ -140,7 +140,7 @@ function watchDMScreenshots(client) {
         screenshotUploadedAt: new Date(),
       });
 
-      await message.reply(`✅ התמונה התקבלה! הבקשה לדמות **${req.charName}** ממתינה לאישור מנהל.`);
+      await message.reply(`✅ התמונה התקבלה! הבקשה לדמות **${req.name}** ממתינה לאישור מנהל.`);
     } catch (err) {
       console.error("❌ שגיאה בהעלאת Screenshot:", err.message);
       await message.reply("❌ שגיאה בהעלאת התמונה. נסה שוב.");
@@ -160,7 +160,7 @@ function watchHandledRequests(client) {
       }
 
       const docs = await PendingCharacter.find({
-        isApproved: { $ne: false },
+        approved: { $ne: false },
       }).lean();
 
       for (const doc of docs) {
@@ -181,7 +181,7 @@ function watchHandledRequests(client) {
           continue;
         }
 
-        if (doc.isApproved === true) {
+        if (doc.approved === true) {
           const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
             .setColor(0x22c55e)
             .setTitle("✅ בקשת דמות — אושרה")
