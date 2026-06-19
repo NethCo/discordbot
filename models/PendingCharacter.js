@@ -5,7 +5,7 @@ const pendingCharacterSchema = new mongoose.Schema({
   name: { type: String, required: true },
   world: { type: String, required: true },
   code: { type: String, required: true },
-  prtsc: { type: String | null, required: true },
+  prtsc: { type: String, default: null },
   approved: { type: Boolean, default: false },
   dmSent: { type: Boolean, default: false },
   screenshotUploadedAt: Date,
