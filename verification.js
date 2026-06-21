@@ -1,9 +1,9 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const https = require("https");
 const PendingCharacter = require("./models/PendingCharacter");
+const User = require("./models/User");
 const { ADMIN_CHANNEL_ID } = require("./config");
-
-const processedPendingIds = new Set();
+const { isDiscordSnowflake, resolveDiscordUserIdFromRequest } = require("./utils/discordIdentity");
 
 function downloadBuffer(url) {
   return new Promise((resolve, reject) => {
@@ -17,9 +17,17 @@ function downloadBuffer(url) {
 }
 
 async function sendVerificationDM(client, req) {
-  if (req.dmSent || !req.uid) return;
+  const discordUserId = await resolveDiscordUserIdFromRequest(req, User);
+  if (req.dmSent || !isDiscordSnowflake(discordUserId)) {
+    if (!req.dmSent) {
+      console.warn(`⚠️ Skipping DM for ${req._id}: no valid Discord ID found`, {
+        uid: req.uid,
+      });
+    }
+    return;
+  }
   try {
-    const discordUser = await client.users.fetch(req.uid);
+    const discordUser = await client.users.fetch(discordUserId);
     const embed = new EmbedBuilder()
       .setColor(0xd4a96a)
       .setTitle("🎮 אימות דמות — MSC Israel")
@@ -36,16 +44,16 @@ async function sendVerificationDM(client, req) {
       .setTimestamp();
     await discordUser.send({ embeds: [embed] });
     await PendingCharacter.findByIdAndUpdate(req._id, { dmSent: true });
-    console.log(`✅ DM נשלח ל-${req.uid} עבור ${req.name}`);
+    console.log(`✅ DM נשלח ל-${discordUserId} עבור ${req.name}`);
   } catch (err) {
     console.error(`❌ שליחת DM נכשלה עבור ${req._id}:`, err.message);
   }
 }
 
 function watchPendingCharacters(client) {
-  const stream = PendingCharacter.watch([], {
-    fullDocument: "updateLookup"
-  });
+  console.log("🚀 Starting watcher");
+
+  const stream = PendingCharacter.watch();
 
   stream.on("change", async (change) => {
     try {
@@ -67,10 +75,10 @@ function watchPendingCharacters(client) {
     }
   });
 
+  console.log("✅ watchPendingCharacters called");
+
   stream.on("error", (err) => {
     console.error("Stream crashed:", err);
-
-    // IMPORTANT: auto-restart (Railway will not do this for you reliably)
     setTimeout(() => watchPendingCharacters(client), 5000);
   });
 
@@ -84,14 +92,21 @@ function watchDMScreenshots(client) {
     if (!message.attachments.size) return;
 
     const discordId = message.author.id;
-    const req = await PendingCharacter.findOne({
-      uid: discordId,
-      approved: false,
-      dmSent: true,
-    });
+    const user = await User.findOne({
+      $or: [
+        { discordId },
+        { "auth.discord.id": discordId },
+      ],
+    }).lean();
+    const req = user ? await PendingCharacter.findOne({ uid: user._id, approved: false }) : null;
 
     if (!req) {
       await message.reply("לא נמצאה בקשה פעילה. אם שלחת בקשה באתר, נסה שוב.");
+      return;
+    }
+
+    if (!req.dmSent) {
+      await message.reply("הבקשה נמצאה, אבל עדיין לא נשלח לך קוד אימות ב-DM.");
       return;
     }
 
@@ -119,7 +134,7 @@ function watchDMScreenshots(client) {
         .addFields(
           { name: "דמות",      value: req.name,                  inline: true },
           { name: "עולם",      value: req.world,                 inline: true },
-          { name: "משתמש",     value: `<@${req.uid}>`,           inline: true },
+          { name: "משתמש",     value: `<@${discordId}>`,         inline: true },
           { name: "קוד אימות", value: `\`${req.code}\``, inline: true },
         )
         .setTimestamp();
@@ -136,7 +151,7 @@ function watchDMScreenshots(client) {
       });
 
       await PendingCharacter.findByIdAndUpdate(req._id, {
-        screenshotUrl: adminMsg.attachments.first()?.url || null,
+        prtsc: adminMsg.attachments.first()?.url || null,
         screenshotUploadedAt: new Date(),
       });
 

@@ -96,28 +96,24 @@ client.once("ready", async () => {
 
   await connectDB();
 
-  const db = require("mongoose");
+  console.log("🟢 MongoDB ready");
 
-  db.connection.once("open", async () => {
-    console.log("🟢 MongoDB fully ready (open event)");
+  scheduleDailyLeaderboard(client);
 
-    scheduleDailyLeaderboard(client);
+  await updateLeaderboard(client);
 
-    await updateLeaderboard(client);
+  await updateLivesMessage(client);
+  setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
 
-    await updateLivesMessage(client);
-    setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
+  scheduleDailyStatusRefresh();
 
-    scheduleDailyStatusRefresh();
+  await updateMemberCountChannel(client);
+  setInterval(() => updateMemberCountChannel(client), 60 * 60 * 1000);
 
-    await updateMemberCountChannel(client);
-    setInterval(() => updateMemberCountChannel(client), 60 * 60 * 1000);
-
-    // ✅ ONLY NOW start change streams
-    watchPendingCharacters(client);
-    watchDMScreenshots(client);
-    watchHandledRequests(client);
-  });
+  // Start change streams immediately after the connection resolves.
+  watchPendingCharacters(client);
+  watchDMScreenshots(client);
+  watchHandledRequests(client);
 
   handleInteractions(client);
   setupWelcome(client);

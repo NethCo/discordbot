@@ -4,6 +4,7 @@ const Character = require("./models/Character");
 const User = require("./models/User");
 const { WEBSITE_RANKINGS_URL } = require("./config");
 const { getUserCharacters, getCharacterRank } = require("./leaderboard");
+const { isDiscordSnowflake, resolveDiscordUserIdFromRequest } = require("./utils/discordIdentity");
 
 const rankSelectionCache = new Map();
 
@@ -145,10 +146,10 @@ async function handleInteractions(client) {
       try {
         const req = await PendingCharacter.findById(reqId);
         if (!req) return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
-        if (req.isApproved !== false) return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
+        if (req.approved !== false) return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
 
         if (isApprove) {
-          const safeCharName = String(req.charName || "").trim();
+          const safeCharName = String(req.name || "").trim();
           const safeWorld = String(req.world || "").trim();
           if (!safeCharName || safeCharName.length > 12) {
             throw new Error("invalid character name length");
@@ -170,13 +171,13 @@ async function handleInteractions(client) {
             fame: fameData?.fame ?? 0,
             imageUrl: overall?.imageUrl ?? null,
             job: overall?.job ?? "",
-            ownerId: req.user,
+            uid: req.uid,
             createdAt: new Date(),
           });
           await character.save();
 
-          if (req.user) {
-            const user = await User.findById(req.user);
+          if (req.uid) {
+            const user = await User.findById(req.uid);
             if (user) {
               const charIdStr = character._id.toString();
               const currentIds = user.characterIds || [];
@@ -188,24 +189,20 @@ async function handleInteractions(client) {
           }
         }
 
-        req.isApproved = isApprove ? true : null;
-        req.handledBy = interaction.user.id;
-        req.handledAt = new Date();
-        await req.save();
+        if (isApprove) {
+          req.approved = true;
+          req.handledBy = interaction.user.id;
+          req.handledAt = new Date();
+          await req.save();
+        } else {
+          await PendingCharacter.findByIdAndDelete(req._id);
+        }
 
         const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
           .setColor(isApprove ? 0x22c55e : 0xef4444)
           .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
           .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: `<@${interaction.user.id}>` });
         await interaction.editReply({ embeds: [updatedEmbed], components: [] });
-
-        try {
-          const u = await client.users.fetch(req.discordId);
-          await u.send(isApprove
-            ? `✅ הדמות **${req.charName}** אושרה ונוספה לחשבון שלך באתר MSC Israel!`
-            : `❌ הבקשה לדמות **${req.charName}** נדחתה. פנה למנהל לפרטים נוספים.`
-          );
-        } catch {}
       } catch (err) {
         console.error("שגיאה ב-approve/reject:", err);
         await interaction.followUp({ content: "❌ לא הצלחתי לטפל בבקשה כרגע.", ephemeral: true }).catch(() => {});
