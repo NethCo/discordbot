@@ -58,7 +58,7 @@ async function updateLivesMessage(client) {
     if (liveStreamers.length === 0) {
       const noLiveEmbed = new EmbedBuilder()
         .setColor(0x9146ff)
-        .setTitle("🔴 לייבים פעילים")
+        .setTitle("לייבים פעילים")
         .setDescription("אין שידורים פעילים כרגע")
         .setFooter({ text: `עודכן: ${now} • מתעדכן כל ${LIVES_UPDATE_INTERVAL_MINUTES} דקות` });
       
@@ -94,14 +94,14 @@ async function updateLivesMessage(client) {
       // Truncate long titles to prevent alignment breaking
       const safeTitle = title.length > 45 ? title.substring(0, 42) + "..." : title;
 
-      streamerColumn += `🔴 [${name}](https://twitch.tv/${streamer.login})\n\n`;
-      statusColumn += `🟢 **${safeTitle}**\n\n`;
+      streamerColumn += `[${name}](https://twitch.tv/${streamer.login})\n\n`;
+      statusColumn += `**${safeTitle}**\n\n`;
       viewersColumn += `👁 ${viewers}\n\n`;
     });
 
     const embed = new EmbedBuilder()
       .setColor(0x9146ff)
-      .setTitle("🔴 לייבים פעילים")
+      .setTitle("לייבים פעילים")
       .addFields(
         { name: "שדרן", value: streamerColumn, inline: true },
         { name: "סטטוס", value: statusColumn, inline: true },
