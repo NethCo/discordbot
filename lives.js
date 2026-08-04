@@ -48,10 +48,10 @@ async function updateLivesMessage(client) {
     if (!channel) return console.error("❌ ערוץ לייבים לא נמצא");
 
     const streamers = await getApprovedStreamers();
-    const logins = streamers.map(s => s.twitchLogin).filter(Boolean);
+    const logins = streamers.map(s => s.login).filter(Boolean);
     const liveData = await fetchLiveStreams(logins);
 
-    const liveStreamers = streamers.filter(s => !!liveData[s.twitchLogin?.toLowerCase()]);
+    const liveStreamers = streamers.filter(s => !!liveData[s.login?.toLowerCase()]);
 
     const savedId = await getLivesMessageId();
     const now = new Date().toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" });
@@ -78,7 +78,7 @@ async function updateLivesMessage(client) {
     }
 
     const totalViewers = liveStreamers.reduce((sum, s) => 
-      sum + ((liveData[s.twitchLogin?.toLowerCase()]?.viewer_count) || 0), 0);
+      sum + ((liveData[s.login?.toLowerCase()]?.viewer_count) || 0), 0);
 
     // Column-based table layout
     let streamerColumn = "";
@@ -86,8 +86,8 @@ async function updateLivesMessage(client) {
     let viewersColumn = "";
 
     liveStreamers.forEach(streamer => {
-      const name = streamer.twitchDisplayName || streamer.twitchLogin;
-      const login = streamer.twitchLogin?.toLowerCase();
+      const name = streamer.name;
+      const login = streamer.login?.toLowerCase();
       const stream = liveData[login] || {};
       const title = stream.title || "";
       const viewers = (stream.viewer_count || 0).toLocaleString();
@@ -95,7 +95,7 @@ async function updateLivesMessage(client) {
       // Truncate long titles to prevent alignment breaking
       const safeTitle = title.length > 45 ? title.substring(0, 42) + "..." : title;
 
-      streamerColumn += `🔴 [${name}](https://twitch.tv/${streamer.twitchLogin})\n\n`;
+      streamerColumn += `🔴 [${name}](https://twitch.tv/${streamer.login})\n\n`;
       statusColumn += `🟢 **${safeTitle}**\n\n`;
       viewersColumn += `👁 ${viewers}\n\n`;
     });

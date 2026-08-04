@@ -42,9 +42,9 @@ async function fetchOverall(characterName) {
       const json = await res.json();
       const match = json?.ranks?.[0];
       if (match) return {
-        level: match.level ?? 0,
+        lvl: match.level ?? 0,
         exp: match.exp ?? 0,
-        imageUrl: match.characterImgURL ?? null,
+        img: match.characterImgURL ?? null,
         job: match.jobName ?? "",
       };
     } catch {}
@@ -86,7 +86,7 @@ async function handleInteractions(client) {
           characters.map(c =>
             new ButtonBuilder()
               .setCustomId(`rank_char_${c.id}`)
-              .setLabel(`${c.name} (${c.level})`)
+              .setLabel(`${c.name} (${c.lvl})`)
               .setStyle(ButtonStyle.Secondary)
           )
         );
@@ -123,7 +123,7 @@ async function handleInteractions(client) {
           .setDescription(
             `🍁 **${charData.name}**\n\n` +
             `🏆 מיקום כללי: **#${rank}**\n` +
-            `⭐ רמה: **${charData.level}**\n` +
+            `⭐ רמה: **${charData.lvl}**\n` +
             `עולם: **${charData.world || "—"}**\n` +
             `עבודה: **${charData.job || "—"}**`
           )
@@ -166,23 +166,22 @@ async function handleInteractions(client) {
           const character = new Character({
             name: safeCharName,
             world: safeWorld,
-            level: overall?.level ?? 0,
+            lvl: overall?.lvl ?? 0,
             exp: overall?.exp ?? 0,
             fame: fameData?.fame ?? 0,
-            imageUrl: overall?.imageUrl ?? null,
+            img: overall?.img ?? null,
             job: overall?.job ?? "",
             uid: req.uid,
-            createdAt: new Date(),
           });
           await character.save();
 
           if (req.uid) {
             const user = await User.findById(req.uid);
             if (user) {
-              const charIdStr = character._id.toString();
-              const currentIds = user.characterIds || [];
-              if (!currentIds.includes(charIdStr)) {
-                user.characterIds = [...currentIds, charIdStr];
+              const charId = character._id;
+              const currentIds = user.charIds || [];
+              if (!currentIds.some(id => String(id) === String(charId))) {
+                user.charIds = [...currentIds, charId];
                 await user.save();
               }
             }

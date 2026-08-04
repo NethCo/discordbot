@@ -92,12 +92,7 @@ function watchDMScreenshots(client) {
     if (!message.attachments.size) return;
 
     const discordId = message.author.id;
-    const user = await User.findOne({
-      $or: [
-        { discordId },
-        { "auth.discord.id": discordId },
-      ],
-    }).lean();
+    const user = await User.findOne({ "auth.discord.id": discordId }).lean();
     const req = user ? await PendingCharacter.findOne({ uid: user._id, approved: false }) : null;
 
     if (!req) {

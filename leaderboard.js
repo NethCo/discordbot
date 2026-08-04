@@ -5,29 +5,29 @@ const BotSync = require("./models/BotSync");
 const { LEADERBOARD_CHANNEL_ID, WEBSITE_RANKINGS_URL } = require("./config");
 
 async function getTop10() {
-  const docs = await Character.find().sort({ level: -1, exp: -1 }).limit(10).lean();
+  const docs = await Character.find().sort({ lvl: -1, exp: -1 }).limit(10).lean();
   return docs.map((doc, i) => ({ rank: i + 1, id: doc._id.toString(), ...doc }));
 }
 
 async function getCharacterRank(charData) {
   const count = await Character.countDocuments({
     $or: [
-      { level: { $gt: charData.level || 0 } },
-      { level: charData.level || 0, exp: { $lte: charData.exp || 0 } },
+      { lvl: { $gt: charData.lvl || 0 } },
+      { lvl: charData.lvl || 0, exp: { $lte: charData.exp || 0 } },
     ],
   });
   return count + 1;
 }
 
 async function getUserCharacters(discordId) {
-  const user = await User.findOne({ discordId }).lean();
+  const user = await User.findOne({ "auth.discord.id": discordId }).lean();
   if (!user) return { status: "no_account", characters: [] };
 
-  const characterIds = user.characterIds || [];
+  const characterIds = user.charIds || [];
   if (!characterIds.length) return { status: "no_characters", characters: [] };
 
   const chars = await Character.find({ _id: { $in: characterIds } }).lean();
-  chars.sort((a, b) => b.level !== a.level ? b.level - a.level : (b.exp || 0) - (a.exp || 0));
+  chars.sort((a, b) => b.lvl !== a.lvl ? b.lvl - a.lvl : (b.exp || 0) - (a.exp || 0));
   const result = chars.map(c => ({ id: c._id.toString(), ...c }));
   return { status: result.length ? "ok" : "no_characters", characters: result };
 }
@@ -38,7 +38,7 @@ function buildLeaderboardEmbed(top10, client) {
   if (!top10.length) {
     return new EmbedBuilder()
       .setColor(0xff6600)
-      .setTitle("🍁 טופ 10 — MapleStory Community Israel")
+      .setTitle("🍁 טופ 10 — MapleStory Global Israel")
       .setDescription("אין דמויות בדירוג עדיין")
       .setFooter({ text: `MSIsrael.gg • עודכן: ${now}`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
   }
@@ -52,7 +52,7 @@ function buildLeaderboardEmbed(top10, client) {
     const pos = medals[c.rank - 1] || `${c.rank}.`;
     rankColumn += `${lrm}${pos}\n\n`;
     charColumn += `${lrm}${c.name}\n\n`;
-    levelColumn += `${lrm}**${c.level}**\n\n`;
+    levelColumn += `${lrm}**${c.lvl}**\n\n`;
   });
 
   return new EmbedBuilder()

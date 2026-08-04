@@ -2,13 +2,12 @@ const mongoose = require("mongoose");
 
 const streamerSchema = new mongoose.Schema({
   uid: String,
-  twitchLogin: String,
-  twitchDisplayName: String,
-  twitchProfileImage: String,
-  isApproved: { type: Boolean, default: false },
-  createdAt: Date,
+  login: String,
+  name: String,
+  img: String,
+  approved: { type: Boolean, default: null },
 }, { timestamps: true, versionKey: false });
 
-streamerSchema.index({ isApproved: 1 });
+streamerSchema.index({ approved: 1 });
 
 module.exports = mongoose.model("Streamer", streamerSchema);
