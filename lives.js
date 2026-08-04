@@ -6,8 +6,7 @@ async function fetchLiveStreams(logins) {
   if (!logins.length) return {};
   if (!SERVER_URL) return {};
   try {
-    const params = logins.map(l => `user_login=${l}`).join("&");
-    const res = await fetch(SERVER_URL + "/api/twitch/streams?" + params);
+    const res = await fetch(`${SERVER_URL}/api/twitch?login=${encodeURIComponent(logins.join(","))}`);
     if (!res.ok) {
       console.warn(`⚠️ Twitch proxy responded with ${res.status}`);
       return {};
@@ -78,7 +77,7 @@ async function updateLivesMessage(client) {
     }
 
     const totalViewers = liveStreamers.reduce((sum, s) => 
-      sum + ((liveData[s.login?.toLowerCase()]?.viewer_count) || 0), 0);
+      sum + ((liveData[s.login?.toLowerCase()]?.viewers) || 0), 0);
 
     // Column-based table layout
     let streamerColumn = "";
@@ -90,7 +89,7 @@ async function updateLivesMessage(client) {
       const login = streamer.login?.toLowerCase();
       const stream = liveData[login] || {};
       const title = stream.title || "";
-      const viewers = (stream.viewer_count || 0).toLocaleString();
+      const viewers = (stream.viewers || 0).toLocaleString();
 
       // Truncate long titles to prevent alignment breaking
       const safeTitle = title.length > 45 ? title.substring(0, 42) + "..." : title;
