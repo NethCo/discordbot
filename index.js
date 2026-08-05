@@ -4,6 +4,7 @@ const { connectDB } = require("./db");
 const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
 const { updateLeaderboard }        = require("./leaderboard");
+const { syncCharacterStats }       = require("./syncStats");
 const { updateLivesMessage }       = require("./lives");
 const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = require("./verification");
 const { handleInteractions }       = require("./interactions");
@@ -86,6 +87,7 @@ function scheduleDailyLeaderboard(client) {
   const targetTime = new Date(Date.now() + waitMs);
   console.log(`⏰ לוח דירוגים יעודכן ב-${targetTime.toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" })}`);
   setTimeout(async () => {
+    await syncCharacterStats();
     await updateLeaderboard(client);
     scheduleDailyLeaderboard(client);
   }, waitMs);
@@ -99,6 +101,8 @@ client.once("ready", async () => {
   console.log("🟢 MongoDB ready");
 
   scheduleDailyLeaderboard(client);
+
+  await syncCharacterStats();
 
   await updateLeaderboard(client);
 

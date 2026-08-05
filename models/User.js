@@ -4,6 +4,7 @@ const userSchema = new mongoose.Schema({
   _id: { type: String, required: true },
   auth: {
     admin: { type: Boolean, default: false },
+    streamer_id: { type: mongoose.Schema.Types.ObjectId, default: null },
     discord: {
       id: { type: String, default: null },
       dName: { type: String, default: null },
@@ -15,7 +16,6 @@ const userSchema = new mongoose.Schema({
     background: { type: String, default: "" },
     mob: { type: String, default: "" },
   },
-  twitch_uid: String,
   charIds: [{ type: mongoose.Schema.Types.ObjectId }],
   paymentsIds: [String],
   favorites: [String],
