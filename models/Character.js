@@ -9,7 +9,7 @@ const characterSchema = new mongoose.Schema({
   exp: { type: Number, default: 0 },
   fame: { type: Number, default: 0 },
   img: String,
-}, { timestamps: true, versionKey: false });
+}, { timestamps: true, versionKey: false, collection: "characters" });
 
 characterSchema.index({ lvl: -1, exp: -1 });
 

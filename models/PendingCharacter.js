@@ -11,7 +11,7 @@ const pendingCharacterSchema = new mongoose.Schema({
   screenshotUploadedAt: Date,
   handledBy: String,
   handledAt: Date,
-}, { timestamps: true, versionKey: false });
+}, { timestamps: true, versionKey: false, collection: "pendingcharacters" });
 
 pendingCharacterSchema.index({ approved: 1 });
 pendingCharacterSchema.index({ uid: 1, approved: 1 });

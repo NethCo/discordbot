@@ -4,7 +4,10 @@ const userSchema = new mongoose.Schema({
   _id: { type: String, required: true },
   auth: {
     admin: { type: Boolean, default: false },
-    streamer_id: { type: mongoose.Schema.Types.ObjectId, default: null },
+    twitch_id: { type: String, default: null },
+    kick_id: { type: String, default: null },
+    /** null = linked only, false = pending admin, true = shows on lives page */
+    streamer_approved: { type: Boolean, default: null },
     discord: {
       id: { type: String, default: null },
       dName: { type: String, default: null },
@@ -18,9 +21,12 @@ const userSchema = new mongoose.Schema({
   },
   charIds: [{ type: mongoose.Schema.Types.ObjectId }],
   paymentsIds: [String],
-  favorites: [String],
-}, { timestamps: true, versionKey: false });
+}, { timestamps: true, versionKey: false, collection: "users" });
 
 userSchema.index({ "auth.discord.id": 1 });
+userSchema.index(
+  { "auth.streamer_approved": 1 },
+  { partialFilterExpression: { "auth.streamer_approved": true } },
+);
 
 module.exports = mongoose.model("User", userSchema);

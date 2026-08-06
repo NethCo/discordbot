@@ -10,5 +10,7 @@ module.exports = {
   WEBSITE_URL:              process.env.WEBSITE_URL,
   WEBSITE_RANKINGS_URL:     process.env.WEBSITE_RANKINGS_URL,
   SERVER_URL:               process.env.SERVER_URL,
+  KICK_CLIENT_ID:           process.env.KICK_CLIENT_ID,
+  KICK_CLIENT_SECRET:       process.env.KICK_CLIENT_SECRET,
   LIVES_UPDATE_INTERVAL_MINUTES,
 };

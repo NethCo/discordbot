@@ -1,13 +1,18 @@
 const mongoose = require("mongoose");
 
 const streamerSchema = new mongoose.Schema({
-  uid: String,
-  login: String,
-  name: String,
-  img: String,
-  approved: { type: Boolean, default: null },
-}, { timestamps: true, versionKey: false });
+  _id: { type: String, required: true },
+  uid: { type: String, required: true },
+  platform: {
+    type: String,
+    enum: ["twitch", "kick", "youtube", "tiktok"],
+    required: true,
+  },
+  name: { type: String, required: true },
+  img: { type: String, default: null },
+}, { timestamps: true, versionKey: false, collection: "streamers" });
 
-streamerSchema.index({ approved: 1 });
+streamerSchema.index({ uid: 1 });
+streamerSchema.index({ platform: 1, uid: 1 });
 
 module.exports = mongoose.model("Streamer", streamerSchema);
