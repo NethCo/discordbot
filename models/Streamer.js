@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const streamerSchema = new mongoose.Schema({
   _id: { type: String, required: true },
-  uid: { type: String, required: true },
+  uid: { type: String, required: true }, // site user id, or "world" for external streamers
   platform: {
     type: String,
     enum: ["twitch", "kick", "youtube", "tiktok"],

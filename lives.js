@@ -13,17 +13,116 @@ const PLATFORM_URLS = {
   kick: "https://kick.com/",
 };
 
+/** Site user id for manually added external streamers (no approval). */
+const WORLD_STREAMER_UID = "world";
+
 /** Embed left stripe — live red */
 const LIVE_EMBED_COLOR = 0xe91916;
 
-/** Override via .env with server emoji, e.g. <:twitch:123> */
-const PLATFORM_ICONS = {
-  twitch: process.env.DISCORD_TWITCH_EMOJI || "🟣",
-  kick: process.env.DISCORD_KICK_EMOJI || "🟢",
+/** Force LTR so leading emoji aren't swallowed in Hebrew embed fields */
+const LRM = "\u200E";
+
+const ORIGIN_ICONS = {
+  community: process.env.DISCORD_COMMUNITY_EMOJI || "🇮🇱",
+  world: process.env.DISCORD_WORLD_EMOJI || "🌐",
 };
 
-function platformIcon(platform) {
-  return PLATFORM_ICONS[platform] || "📺";
+const PLATFORM_LABELS = {
+  twitch: "Twitch",
+  kick: "Kick",
+};
+
+function isWorldStreamer(uid) {
+  return uid === WORLD_STREAMER_UID;
+}
+
+function originIcon(uid) {
+  return isWorldStreamer(uid) ? ORIGIN_ICONS.world : ORIGIN_ICONS.community;
+}
+
+function platformBadge(platform) {
+  const label = PLATFORM_LABELS[platform] || platform;
+  return `\`[${label}]\``;
+}
+
+function streamerViewers(streamer, liveData) {
+  return Number(liveData[liveKey(streamer.platform, String(streamer._id))]?.viewers) || 0;
+}
+
+function sortLiveStreamers(streamers, liveData) {
+  return [...streamers].sort((a, b) => streamerViewers(b, liveData) - streamerViewers(a, liveData));
+}
+
+function formatStreamerLine(streamer, name, url) {
+  return `${LRM}${originIcon(streamer.uid)} ${platformBadge(streamer.platform)} [${name}](${url})`;
+}
+
+/** Inline embed column width — manual wraps keep the three columns aligned. */
+const STATUS_WRAP_CHARS = 26;
+
+/** Wraps on spaces so words are never cut in half. */
+function wrapWords(text, maxLen) {
+  const lines = [];
+  let current = "";
+
+  for (const word of String(text).split(/\s+/).filter(Boolean)) {
+    let candidate = current ? `${current} ${word}` : word;
+    while (candidate.length > maxLen) {
+      if (current) {
+        lines.push(current);
+        current = "";
+        candidate = word;
+        continue;
+      }
+      lines.push(candidate.slice(0, maxLen));
+      candidate = candidate.slice(maxLen);
+    }
+    current = candidate;
+  }
+
+  if (current) lines.push(current);
+  return lines.length ? lines : ["—"];
+}
+
+/** LRM keeps padding lines from being trimmed away by Discord. */
+function padBlock(lines, height) {
+  const padded = [...lines];
+  while (padded.length < height) padded.push(LRM);
+  return padded;
+}
+
+function buildTableRow(streamerText, title, viewersText) {
+  const status = wrapWords(title || "—", STATUS_WRAP_CHARS).map((line) => `${LRM}**${line}**`);
+  const streamer = streamerText.split("\n");
+  const viewers = viewersText.split("\n");
+  const height = Math.max(status.length, streamer.length, viewers.length);
+
+  return {
+    streamer: padBlock(streamer, height).join("\n"),
+    status: padBlock(status, height).join("\n"),
+    viewers: padBlock(viewers, height).join("\n"),
+  };
+}
+
+/** Blank spacer line between streamers, in every column. */
+const ROW_SEPARATOR = `\n${LRM}\n`;
+
+const EMBED_FIELD_LIMIT = 1024;
+
+function joinColumn(rows, key) {
+  return rows.map((row) => row[key]).join(ROW_SEPARATOR);
+}
+
+/** Drops the lowest-viewer rows until every column fits Discord's field limit. */
+function fitRowsToEmbed(rows) {
+  const kept = [...rows];
+  while (
+    kept.length > 1 &&
+    ["streamer", "status", "viewers"].some((key) => joinColumn(kept, key).length > EMBED_FIELD_LIMIT)
+  ) {
+    kept.pop();
+  }
+  return kept;
 }
 
 let kickToken = null;
@@ -184,13 +283,17 @@ async function updateLivesMessage(client) {
       liveData[liveKey("kick", id)] = info;
     }
 
-    const liveStreamers = supported.filter(
-      (s) => !!liveData[liveKey(s.platform, String(s._id))],
+    const liveStreamers = sortLiveStreamers(
+      supported.filter((s) => !!liveData[liveKey(s.platform, String(s._id))]),
+      liveData,
     );
 
+    const communityLive = liveStreamers.filter((s) => !isWorldStreamer(s.uid)).length;
+    const worldLive = liveStreamers.length - communityLive;
+
     console.log(
-      `📺 לייבים: ${supported.length} מאושרים, ${liveStreamers.length} פעילים` +
-      ` (Twitch: ${Object.keys(twitchLive).length}, Kick: ${Object.keys(kickLive).length})`,
+      `📺 לייבים: ${supported.length} ברשימה, ${liveStreamers.length} פעילים` +
+      ` (קהילה: ${communityLive}, בינלאומי: ${worldLive})`,
     );
 
     const savedId = await getLivesMessageId();
@@ -220,11 +323,7 @@ async function updateLivesMessage(client) {
       return;
     }
 
-    let streamerColumn = "";
-    let statusColumn = "";
-    let viewersColumn = "";
-
-    liveStreamers.forEach((streamer) => {
+    const rows = liveStreamers.map((streamer) => {
       const name = streamer.name;
       const key = liveKey(streamer.platform, String(streamer._id));
       const stream = liveData[key] || {};
@@ -233,20 +332,25 @@ async function updateLivesMessage(client) {
       const login = stream.login || streamer.name;
       const baseUrl = PLATFORM_URLS[streamer.platform] || PLATFORM_URLS.twitch;
 
-      const safeTitle = title.length > 45 ? title.substring(0, 42) + "..." : title;
-
-      streamerColumn += `${platformIcon(streamer.platform)} [${name}](${baseUrl}${login})\n\n`;
-      statusColumn += `**${safeTitle}**\n\n`;
-      viewersColumn += `👁 ${viewers}\n\n`;
+      return buildTableRow(
+        formatStreamerLine(streamer, name, `${baseUrl}${login}`),
+        title,
+        `${LRM}👁 ${viewers}`,
+      );
     });
+
+    const shownRows = fitRowsToEmbed(rows);
+    const streamerColumn = joinColumn(shownRows, "streamer");
+    const statusColumn = joinColumn(shownRows, "status");
+    const viewersColumn = joinColumn(shownRows, "viewers");
 
     const embed = new EmbedBuilder()
       .setColor(LIVE_EMBED_COLOR)
       .setTitle("לייבים פעילים")
       .addFields(
-        { name: "שדרן", value: streamerColumn, inline: true },
-        { name: "סטטוס", value: statusColumn, inline: true },
-        { name: "צופים", value: viewersColumn, inline: true },
+        { name: "שדרן", value: streamerColumn || "—", inline: true },
+        { name: "סטטוס", value: statusColumn || "—", inline: true },
+        { name: "צופים", value: viewersColumn || "—", inline: true },
       )
       .setFooter({
         text: `MSIsrael.gg • עודכן: ${now} • מתעדכן כל ${LIVES_UPDATE_INTERVAL_MINUTES} דקות`,

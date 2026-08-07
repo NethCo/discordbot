@@ -32,8 +32,23 @@ async function getUserCharacters(discordId) {
   return { status: result.length ? "ok" : "no_characters", characters: result };
 }
 
+const LRM = "\u200E";
+const MEDALS = ["🥇", "🥈", "🥉"];
+
+function rankBadge(rank) {
+  return MEDALS[rank - 1] || `${rank}.`;
+}
+
+function worldBadge(world) {
+  const label = String(world || "—").trim() || "—";
+  return `\`[${label}]\``;
+}
+
+function formatCharacterLine(c) {
+  return `${LRM}${rankBadge(c.rank)} ${worldBadge(c.world)} ${c.name}`;
+}
+
 function buildLeaderboardEmbed(top10, client) {
-  const medals = ["🥇", "🥈", "🥉"];
   const now = new Date().toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" });
   if (!top10.length) {
     return new EmbedBuilder()
@@ -43,33 +58,23 @@ function buildLeaderboardEmbed(top10, client) {
       .setFooter({ text: `MSIsrael.gg • עודכן: ${now}`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
   }
 
-  let rankColumn = "";
-  let charColumn = "";
-  let levelColumn = "";
-
-  const lrm = "\u200E";
-  top10.forEach(c => {
-    const pos = medals[c.rank - 1] || `${c.rank}.`;
-    rankColumn += `${lrm}${pos}\n\n`;
-    charColumn += `${lrm}${c.name}\n\n`;
-    levelColumn += `${lrm}**${c.lvl}**\n\n`;
-  });
+  const charColumn = top10.map((c) => formatCharacterLine(c)).join(`\n${LRM}\n`);
+  const levelColumn = top10.map((c) => `${LRM}**${c.lvl}**`).join(`\n${LRM}\n`);
 
   return new EmbedBuilder()
     .setColor(0xff6600)
-    .setTitle("🍁 טופ 10 — MapleStory Community Israel")
+    .setTitle("🍁 טופ 10 — MapleStory Global Israel")
     .addFields(
-      { name: `${lrm}דירוג`, value: rankColumn, inline: true },
-      { name: `${lrm}דמות`, value: charColumn, inline: true },
-      { name: `${lrm}רמה`, value: levelColumn, inline: true }
+      { name: `${LRM}דמות`, value: charColumn, inline: true },
+      { name: `${LRM}רמה`, value: levelColumn, inline: true },
     )
     .setFooter({ text: `MSIsrael.gg • עודכן: ${now}`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
 }
 
 function buildLeaderboardButtons() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("my_rank").setLabel("📊 הדירוג שלי").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setLabel("🌐 רשימה מלאה באתר").setStyle(ButtonStyle.Link).setURL(WEBSITE_RANKINGS_URL),
+    new ButtonBuilder().setCustomId("my_rank").setLabel("הדירוג שלי 📊").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setLabel("לטבלה המלאה באתר 🌐").setStyle(ButtonStyle.Link).setURL(WEBSITE_RANKINGS_URL),
   );
 }
 
