@@ -50,7 +50,12 @@ function streamerViewers(streamer, liveData) {
 }
 
 function sortLiveStreamers(streamers, liveData) {
-  return [...streamers].sort((a, b) => streamerViewers(b, liveData) - streamerViewers(a, liveData));
+  return [...streamers].sort((a, b) => {
+    const aWorld = isWorldStreamer(a.uid) ? 1 : 0;
+    const bWorld = isWorldStreamer(b.uid) ? 1 : 0;
+    if (aWorld !== bWorld) return aWorld - bWorld;
+    return streamerViewers(b, liveData) - streamerViewers(a, liveData);
+  });
 }
 
 function formatStreamerLine(streamer, name, url) {
