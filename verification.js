@@ -24,7 +24,7 @@ async function sendVerificationDM(client, req) {
         uid: req.uid,
       });
     }
-    return;
+    return false;
   }
   try {
     const discordUser = await client.users.fetch(discordUserId);
@@ -43,33 +43,39 @@ async function sendVerificationDM(client, req) {
       .setFooter({ text: `מזהה בקשה: ${req._id}` })
       .setTimestamp();
     await discordUser.send({ embeds: [embed] });
-    await PendingCharacter.findByIdAndUpdate(req._id, { dmSent: true });
+    await PendingCharacter.findByIdAndUpdate(req._id, {
+      $set: { dmSent: true },
+      $unset: { dmResendAt: 1 },
+    });
     console.log(`✅ DM נשלח ל-${discordUserId} עבור ${req.name}`);
+    return true;
   } catch (err) {
     console.error(`❌ שליחת DM נכשלה עבור ${req._id}:`, err.message);
+    return false;
   }
 }
 
 function watchPendingCharacters(client) {
   console.log("🚀 Starting watcher");
 
-  const stream = PendingCharacter.watch();
+  const stream = PendingCharacter.watch([], { fullDocument: "updateLookup" });
 
   stream.on("change", async (change) => {
     try {
-      if (change.operationType !== "insert") return;
-
       const doc = change.fullDocument;
+      if (!doc || doc.approved || doc.rejected || doc.dmSent) return;
 
-      if (!doc || doc.approved || doc.dmSent) return;
+      if (change.operationType === "insert") {
+        await sendVerificationDM(client, doc);
+        return;
+      }
 
-      await sendVerificationDM(client, doc);
+      if (change.operationType !== "update" && change.operationType !== "replace") return;
 
-      await PendingCharacter.updateOne(
-        { _id: doc._id },
-        { $set: { dmSent: true } }
-      );
-
+      const fields = change.updateDescription?.updatedFields || {};
+      if (fields.dmResendAt || (change.operationType === "replace" && doc.dmResendAt)) {
+        await sendVerificationDM(client, doc);
+      }
     } catch (err) {
       console.error("ChangeStream error:", err);
     }

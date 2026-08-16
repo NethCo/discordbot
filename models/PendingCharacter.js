@@ -9,6 +9,7 @@ const pendingCharacterSchema = new mongoose.Schema({
   approved: { type: Boolean, default: false },
   dmSent: { type: Boolean, default: false },
   screenshotUploadedAt: Date,
+  dmResendAt: Date,
   handledBy: String,
   handledAt: Date,
   rejected: { type: Boolean, default: false },
