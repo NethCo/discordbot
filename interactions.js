@@ -146,7 +146,7 @@ async function handleInteractions(client) {
       try {
         const req = await PendingCharacter.findById(reqId);
         if (!req) return interaction.followUp({ content: "❌ הבקשה לא נמצאה.", ephemeral: true });
-        if (req.approved !== false) return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
+        if (req.approved !== false || req.rejected) return interaction.followUp({ content: "הבקשה כבר טופלה.", ephemeral: true });
 
         if (isApprove) {
           const safeCharName = String(req.name || "").trim();
@@ -192,6 +192,7 @@ async function handleInteractions(client) {
           req.approved = true;
           req.handledBy = interaction.user.id;
           req.handledAt = new Date();
+          req.discordHandled = true;
           await req.save();
         } else {
           await PendingCharacter.findByIdAndDelete(req._id);

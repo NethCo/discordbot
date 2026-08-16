@@ -3,7 +3,7 @@ const https = require("https");
 const PendingCharacter = require("./models/PendingCharacter");
 const User = require("./models/User");
 const { ADMIN_CHANNEL_ID } = require("./config");
-const { isDiscordSnowflake, resolveDiscordUserIdFromRequest } = require("./utils/discordIdentity");
+const { isDiscordSnowflake, resolveDiscordUserIdFromRequest, resolveHandlerMention } = require("./utils/discordIdentity");
 
 function downloadBuffer(url) {
   return new Promise((resolve, reject) => {
@@ -93,7 +93,9 @@ function watchDMScreenshots(client) {
 
     const discordId = message.author.id;
     const user = await User.findOne({ "auth.discord.id": discordId }).lean();
-    const req = user ? await PendingCharacter.findOne({ uid: user._id, approved: false }) : null;
+    const req = user
+      ? await PendingCharacter.findOne({ uid: user._id, approved: false, rejected: { $ne: true } })
+      : null;
 
     if (!req) {
       await message.reply("לא נמצאה בקשה פעילה. אם שלחת בקשה באתר, נסה שוב.");
@@ -148,6 +150,7 @@ function watchDMScreenshots(client) {
       await PendingCharacter.findByIdAndUpdate(req._id, {
         prtsc: adminMsg.attachments.first()?.url || null,
         screenshotUploadedAt: new Date(),
+        adminMessageId: adminMsg.id,
       });
 
       await message.reply(`✅ התמונה התקבלה! הבקשה לדמות **${req.name}** ממתינה לאישור מנהל.`);
@@ -158,56 +161,112 @@ function watchDMScreenshots(client) {
   });
 }
 
-function watchHandledRequests(client) {
-  const seenIds = new Map();
-  const MAX_AGE_MS = 10 * 60 * 1000;
+function requestStillOpen(msg, idStr) {
+  return msg?.components?.[0]?.components?.some(btn =>
+    btn.customId === `approve_${idStr}` || btn.customId === `reject_${idStr}`
+  );
+}
 
-  setInterval(async () => {
+async function findAdminRequestMessage(client, doc) {
+  if (!ADMIN_CHANNEL_ID) return null;
+  const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
+  const idStr = doc._id.toString();
+
+  if (doc.adminMessageId) {
     try {
-      const now = Date.now();
-      for (const [id, ts] of seenIds) {
-        if (now - ts > MAX_AGE_MS) seenIds.delete(id);
-      }
+      const msg = await adminChannel.messages.fetch(doc.adminMessageId);
+      if (msg) return msg;
+    } catch {}
+  }
 
-      const docs = await PendingCharacter.find({
-        approved: { $ne: false },
-      }).lean();
+  const messages = await adminChannel.messages.fetch({ limit: 50 });
+  return messages.find(m => requestStillOpen(m, idStr)) || null;
+}
 
-      for (const doc of docs) {
-        const idStr = doc._id.toString();
-        if (seenIds.has(idStr)) continue;
-        if (!ADMIN_CHANNEL_ID) continue;
+async function syncAdminRequestMessage(client, doc) {
+  const isApprove = doc.approved === true;
+  const isReject = doc.rejected === true;
+  if (!isApprove && !isReject) return false;
 
-        const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
-        const messages = await adminChannel.messages.fetch({ limit: 50 });
-        const msg = messages.find(m =>
-          m.components?.[0]?.components?.some(btn =>
-            btn.customId === `approve_${idStr}` || btn.customId === `reject_${idStr}`
-          )
-        );
+  const claimed = await PendingCharacter.findOneAndUpdate(
+    {
+      _id: doc._id,
+      discordHandled: { $ne: true },
+      $or: [{ approved: true }, { rejected: true }],
+    },
+    { $set: { discordHandled: true } },
+  );
+  if (!claimed) return false;
 
-        if (!msg) {
-          seenIds.set(idStr, Date.now());
-          continue;
-        }
+  try {
+    const msg = await findAdminRequestMessage(client, doc);
+    const idStr = doc._id.toString();
 
-        if (doc.approved === true) {
-          const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
-            .setColor(0x22c55e)
-            .setTitle("✅ בקשת דמות — אושרה")
-            .addFields({ name: "אושר על ידי", value: "אתר האדמין" });
-          await msg.edit({ embeds: [updatedEmbed], components: [] });
-        } else {
-          await msg.delete();
-        }
-
-        seenIds.set(idStr, Date.now());
-        console.log("✅ הודעת אדמין עודכנה עבור", idStr);
-      }
-    } catch (err) {
-      console.error("❌ שגיאה ב-watchHandledRequests:", err.message);
+    if (msg && requestStillOpen(msg, idStr) && msg.embeds?.[0]) {
+      const who = await resolveHandlerMention(doc.handledBy, User);
+      const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
+        .setColor(isApprove ? 0x22c55e : 0xef4444)
+        .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
+        .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: who });
+      await msg.edit({ embeds: [updatedEmbed], components: [] });
     }
-  }, 10_000);
+
+    if (isReject) {
+      await PendingCharacter.findByIdAndDelete(doc._id);
+    }
+
+    console.log("✅ הודעת אדמין עודכנה עבור", doc._id.toString());
+    return true;
+  } catch (err) {
+    await PendingCharacter.findByIdAndUpdate(doc._id, { $unset: { discordHandled: 1 } }).catch(() => {});
+    throw err;
+  }
+}
+
+async function catchUpHandledRequests(client) {
+  const docs = await PendingCharacter.find({
+    discordHandled: { $ne: true },
+    $or: [{ approved: true }, { rejected: true }],
+  }).lean();
+
+  for (const doc of docs) {
+    try {
+      await syncAdminRequestMessage(client, doc);
+    } catch (err) {
+      console.error("❌ שגיאה בעדכון הודעת אדמין:", doc._id.toString(), err.message);
+    }
+  }
+}
+
+function watchHandledRequests(client) {
+  void catchUpHandledRequests(client);
+  setInterval(() => void catchUpHandledRequests(client), 10_000);
+
+  const startStream = () => {
+    const stream = PendingCharacter.watch(
+      [{ $match: { operationType: { $in: ["update", "replace"] } } }],
+      { fullDocument: "updateLookup" },
+    );
+
+    stream.on("change", async (change) => {
+      try {
+        const doc = change.fullDocument;
+        if (!doc || doc.discordHandled) return;
+        if (doc.approved === true || doc.rejected === true) {
+          await syncAdminRequestMessage(client, doc);
+        }
+      } catch (err) {
+        console.error("❌ ChangeStream watchHandledRequests:", err.message);
+      }
+    });
+
+    stream.on("error", (err) => {
+      console.error("watchHandledRequests stream crashed:", err);
+      setTimeout(startStream, 5000);
+    });
+  };
+
+  startStream();
 }
 
 module.exports = { watchPendingCharacters, watchDMScreenshots, watchHandledRequests };

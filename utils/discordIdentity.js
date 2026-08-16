@@ -14,4 +14,19 @@ async function resolveDiscordUserIdFromRequest(request, userModel) {
   }
 }
 
-module.exports = { isDiscordSnowflake, resolveDiscordUserIdFromRequest };
+/** `handledBy` is a Discord snowflake (bot button) or a website user uid. */
+async function resolveHandlerMention(handledBy, userModel) {
+  if (isDiscordSnowflake(handledBy)) return `<@${handledBy}>`;
+  if (!handledBy || !userModel) return "אתר האדמין";
+
+  try {
+    const userDoc = await userModel.findById(handledBy).lean();
+    const discordId = userDoc?.auth?.discord?.id || userDoc?.discordId;
+    if (isDiscordSnowflake(discordId)) return `<@${discordId}>`;
+    if (userDoc?.auth?.discord?.dName) return userDoc.auth.discord.dName;
+  } catch {}
+
+  return "אתר האדמין";
+}
+
+module.exports = { isDiscordSnowflake, resolveDiscordUserIdFromRequest, resolveHandlerMention };

@@ -11,6 +11,9 @@ const pendingCharacterSchema = new mongoose.Schema({
   screenshotUploadedAt: Date,
   handledBy: String,
   handledAt: Date,
+  rejected: { type: Boolean, default: false },
+  adminMessageId: String,
+  discordHandled: { type: Boolean, default: false },
 }, { timestamps: true, versionKey: false, collection: "pendingcharacters" });
 
 pendingCharacterSchema.index({ approved: 1 });
