@@ -1,45 +1,6 @@
 const Character = require("./models/Character");
 const BotSync = require("./models/BotSync");
-
-const NEXON_BASE = "https://www.nexon.com/api/maplestory/no-auth/ranking/v2/na";
-const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-  "Referer": "https://www.nexon.com/maplestory/rankings/north-america/overall-ranking/legendary",
-  "Accept": "application/json",
-};
-
-async function fetchOverall(characterName) {
-  for (const rebootIndex of [0, 1]) {
-    const url = `${NEXON_BASE}?type=overall&id=legendary&reboot_index=${rebootIndex}&page_index=1&character_name=${encodeURIComponent(characterName)}`;
-    try {
-      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const match = json?.ranks?.[0];
-      if (match) return {
-        lvl: match.level ?? 0,
-        exp: match.exp ?? 0,
-        img: match.characterImgURL ?? null,
-        job: match.jobName ?? "",
-      };
-    } catch {}
-  }
-  return null;
-}
-
-async function fetchFame(characterName) {
-  for (const rebootIndex of [0, 1]) {
-    const url = `${NEXON_BASE}?type=fame&id=legendary&reboot_index=${rebootIndex}&page_index=1&character_name=${encodeURIComponent(characterName)}`;
-    try {
-      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const match = json?.ranks?.[0];
-      if (match) return { fame: match.exp ?? 0 };
-    } catch {}
-  }
-  return null;
-}
+const { fetchOverall, fetchFame } = require("./lib/nexonCharacter");
 
 async function writeSyncStatus(status, extra = {}) {
   const update = {
@@ -67,9 +28,10 @@ async function syncCharacterStats() {
     for (const char of chars) {
       if (!char.name) continue;
 
+      const world = String(char.world || "").trim();
       const [overall, fameData] = await Promise.all([
-        fetchOverall(char.name),
-        fetchFame(char.name),
+        fetchOverall(char.name, world),
+        fetchFame(char.name, world),
       ]);
 
       if (!overall && !fameData) { missing++; continue; }

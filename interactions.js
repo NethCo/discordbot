@@ -7,14 +7,7 @@ const { getUserCharacters, getCharacterRank } = require("./leaderboard");
 const { isDiscordSnowflake, resolveDiscordUserIdFromRequest } = require("./utils/discordIdentity");
 
 const rankSelectionCache = new Map();
-
-const ALLOWED_WORLDS = new Set(["Scania", "Bera", "Kronos", "Hyperion"]);
-const NEXON_BASE = "https://www.nexon.com/api/maplestory/no-auth/ranking/v2/na";
-const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-  "Referer": "https://www.nexon.com/maplestory/rankings/north-america/overall-ranking/legendary",
-  "Accept": "application/json",
-};
+const { ALLOWED_WORLDS, fetchOverall, fetchFame } = require("./lib/nexonCharacter");
 
 function saveUserRankCache(discordId, characters) {
   rankSelectionCache.set(discordId, {
@@ -31,39 +24,6 @@ function getUserRankCache(discordId, charId) {
     return null;
   }
   return cache.byId.get(charId) || null;
-}
-
-async function fetchOverall(characterName) {
-  for (const rebootIndex of [0, 1]) {
-    const url = `${NEXON_BASE}?type=overall&id=legendary&reboot_index=${rebootIndex}&page_index=1&character_name=${encodeURIComponent(characterName)}`;
-    try {
-      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const match = json?.ranks?.[0];
-      if (match) return {
-        lvl: match.level ?? 0,
-        exp: match.exp ?? 0,
-        img: match.characterImgURL ?? null,
-        job: match.jobName ?? "",
-      };
-    } catch {}
-  }
-  return null;
-}
-
-async function fetchFame(characterName) {
-  for (const rebootIndex of [0, 1]) {
-    const url = `${NEXON_BASE}?type=fame&id=legendary&reboot_index=${rebootIndex}&page_index=1&character_name=${encodeURIComponent(characterName)}`;
-    try {
-      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const match = json?.ranks?.[0];
-      if (match) return { fame: match.exp ?? 0 };
-    } catch {}
-  }
-  return null;
 }
 
 async function handleInteractions(client) {
@@ -159,9 +119,13 @@ async function handleInteractions(client) {
           }
 
           const [overall, fameData] = await Promise.all([
-            fetchOverall(safeCharName),
-            fetchFame(safeCharName),
+            fetchOverall(safeCharName, safeWorld),
+            fetchFame(safeCharName, safeWorld),
           ]);
+
+          if (!overall) {
+            throw new Error("character not found on world");
+          }
 
           const character = new Character({
             name: safeCharName,
