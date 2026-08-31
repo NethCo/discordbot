@@ -4,6 +4,8 @@ const {
   SERVER_URL,
   KICK_CLIENT_ID,
   KICK_CLIENT_SECRET,
+  LIVES_CHANNEL_ID,
+  LIVES_MESSAGE_ID,
 } = require("./config");
 const { getGuildsWithLives, upsertGuildConfig, worldsLabel } = require("./lib/guildConfig");
 const {
@@ -11,6 +13,7 @@ const {
   parseUpdatedAtFromLine,
   readUpdatedLineFromEmbed,
 } = require("./lib/embedUpdatedLine");
+const { findBotEmbedMessage } = require("./lib/findBotMessage");
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -295,26 +298,32 @@ function applyLivesUpdatedLine(embed, updatedAt = Date.now()) {
   return applyUpdatedLine(embed, updatedAt, livesUpdatedIntervalText());
 }
 
+function isLivesEmbed(embed) {
+  if (String(embed?.title || "").includes(LIVES_TITLE)) return true;
+  return (embed?.fields || []).some((f) => f.name === "Streamer");
+}
+
+function livesMessageIds(config) {
+  const ids = [];
+  if (
+    LIVES_MESSAGE_ID
+    && LIVES_CHANNEL_ID
+    && String(config.livesChannelId) === String(LIVES_CHANNEL_ID)
+  ) {
+    ids.push(LIVES_MESSAGE_ID);
+  }
+  if (config.livesMessageId) ids.push(config.livesMessageId);
+  return ids;
+}
+
 async function resolveLivesMessage(channel, client, config) {
-  let msg = null;
-
-  if (config.livesMessageId) {
-    try {
-      msg = await channel.messages.fetch(config.livesMessageId);
-    } catch {}
+  const msg = await findBotEmbedMessage(channel, client, {
+    ids: livesMessageIds(config),
+    matchEmbed: isLivesEmbed,
+  });
+  if (msg && msg.id !== config.livesMessageId) {
+    await upsertGuildConfig(config.guildId, { livesMessageId: msg.id });
   }
-
-  if (!msg) {
-    const messages = await channel.messages.fetch({ limit: 15 });
-    msg = messages.find(
-      (m) => m.author?.id === client.user.id
-        && String(m.embeds[0]?.title || "").includes(LIVES_TITLE),
-    );
-    if (msg) {
-      await upsertGuildConfig(config.guildId, { livesMessageId: msg.id });
-    }
-  }
-
   return msg;
 }
 
@@ -366,7 +375,7 @@ async function updateGuildLives(client, config, supported, liveData) {
     `📺 לייבים (${config.guildId}, ${worldsLabel(config)}): ${scopedStreamers.length} ברשימה, ${liveStreamers.length} פעילים`,
   );
 
-  const savedId = config.livesMessageId;
+  const savedMsg = await resolveLivesMessage(channel, client, config);
   const updatedAt = Date.now();
 
   if (liveStreamers.length === 0) {
@@ -378,10 +387,9 @@ async function updateGuildLives(client, config, supported, liveData) {
       updatedAt,
     );
 
-    if (savedId) {
+    if (savedMsg) {
       try {
-        const msg = await channel.messages.fetch(savedId);
-        await msg.edit({ embeds: [noLiveEmbed], components: [] });
+        await savedMsg.edit({ embeds: [noLiveEmbed], components: [] });
         return;
       } catch {}
     }
@@ -423,10 +431,9 @@ async function updateGuildLives(client, config, supported, liveData) {
     updatedAt,
   );
 
-  if (savedId) {
+  if (savedMsg) {
     try {
-      const msg = await channel.messages.fetch(savedId);
-      await msg.edit({ embeds: [embed], components: [] });
+      await savedMsg.edit({ embeds: [embed], components: [] });
       return;
     } catch {}
   }

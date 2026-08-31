@@ -1,7 +1,8 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const Character = require("./models/Character");
 const User = require("./models/User");
-const { WEBSITE_RANKINGS_URL } = require("./config");
+const { WEBSITE_RANKINGS_URL, LEADERBOARD_CHANNEL_ID, LEADERBOARD_MESSAGE_ID } = require("./config");
+const { findBotEmbedMessage } = require("./lib/findBotMessage");
 const {
   applyUpdatedLine,
   buildUpdatedLine,
@@ -200,22 +201,32 @@ async function ensureLeaderboardFooter(client) {
   return getLeaderboardUpdatedLine();
 }
 
-async function resolveLeaderboardMessageId(channel, client, config) {
-  if (config.leaderboardMessageId) return config.leaderboardMessageId;
+function leaderboardMessageIds(config) {
+  const ids = [];
+  if (
+    LEADERBOARD_MESSAGE_ID
+    && LEADERBOARD_CHANNEL_ID
+    && String(config.leaderboardChannelId) === String(LEADERBOARD_CHANNEL_ID)
+  ) {
+    ids.push(LEADERBOARD_MESSAGE_ID);
+  }
+  if (config.leaderboardMessageId) ids.push(config.leaderboardMessageId);
+  return ids;
+}
 
-  try {
-    const messages = await channel.messages.fetch({ limit: 25 });
-    const match = messages.find(
-      (m) => m.author?.id === client.user.id
-        && String(m.embeds[0]?.title || "").includes(LEADERBOARD_TITLE),
-    );
-    if (match) {
-      await upsertGuildConfig(config.guildId, { leaderboardMessageId: match.id });
-      return match.id;
-    }
-  } catch {}
+function isLeaderboardEmbed(embed) {
+  return String(embed?.title || "").includes(LEADERBOARD_TITLE);
+}
 
-  return null;
+async function resolveLeaderboardMessage(channel, client, config) {
+  const msg = await findBotEmbedMessage(channel, client, {
+    ids: leaderboardMessageIds(config),
+    matchEmbed: isLeaderboardEmbed,
+  });
+  if (msg && msg.id !== config.leaderboardMessageId) {
+    await upsertGuildConfig(config.guildId, { leaderboardMessageId: msg.id });
+  }
+  return msg;
 }
 
 /** Startup / deploy — edit existing message, keep timestamp, no new post if none found. */
@@ -227,13 +238,12 @@ async function refreshLeaderboardLayoutOnStartup(client) {
       const channel = await client.channels.fetch(config.leaderboardChannelId);
       if (!channel) continue;
 
-      const messageId = await resolveLeaderboardMessageId(channel, client, config);
-      if (!messageId) {
+      const msg = await resolveLeaderboardMessage(channel, client, config);
+      if (!msg) {
         console.log(`⏭️  Leaderboard: no message in channel (${config.guildId}) — skipping startup`);
         continue;
       }
 
-      const msg = await channel.messages.fetch(messageId);
       const existingLine = readUpdatedLineFromEmbed(msg.embeds[0]);
       const updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
       setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
@@ -374,11 +384,10 @@ async function updateGuildLeaderboard(client, config, { refreshTimestamp = true 
 
   const top10 = await getTop10();
   const row = buildLeaderboardButtons();
-  const messageId = await resolveLeaderboardMessageId(channel, client, config);
+  const msg = await resolveLeaderboardMessage(channel, client, config);
 
-  if (messageId) {
+  if (msg) {
     try {
-      const msg = await channel.messages.fetch(messageId);
       let updatedAt = Date.now();
       if (!refreshTimestamp) {
         const existingLine = readUpdatedLineFromEmbed(msg.embeds[0])
@@ -398,9 +407,9 @@ async function updateGuildLeaderboard(client, config, { refreshTimestamp = true 
   setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
   const embed = buildLeaderboardEmbed(top10, client, updatedAt);
 
-  const msg = await channel.send({ embeds: [embed], components: [row] });
-  await upsertGuildConfig(config.guildId, { leaderboardMessageId: msg.id });
-  console.log(`✅ Leaderboard posted (${config.guildId}): message ${msg.id}`);
+  const newMsg = await channel.send({ embeds: [embed], components: [row] });
+  await upsertGuildConfig(config.guildId, { leaderboardMessageId: newMsg.id });
+  console.log(`✅ Leaderboard posted (${config.guildId}): message ${newMsg.id}`);
   return true;
 }
 

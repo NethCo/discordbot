@@ -3,10 +3,12 @@ const LIVES_UPDATE_INTERVAL_MINUTES = 15;
 module.exports = {
   DISCORD_TOKEN:            process.env.DISCORD_TOKEN,
   LEADERBOARD_CHANNEL_ID:   process.env.LEADERBOARD_CHANNEL_ID,
+  LEADERBOARD_MESSAGE_ID:   process.env.LEADERBOARD_MESSAGE_ID,
   ADMIN_CHANNEL_ID:         process.env.ADMIN_CHANNEL_ID,
   WELCOME_CHANNEL_ID:       process.env.WELCOME_CHANNEL_ID,
   MEMBER_COUNT_CHANNEL_ID:  process.env.MEMBER_COUNT_CHANNEL_ID,
   LIVES_CHANNEL_ID:         process.env.LIVES_CHANNEL_ID,
+  LIVES_MESSAGE_ID:         process.env.LIVES_MESSAGE_ID,
   WEBSITE_URL:              process.env.WEBSITE_URL,
   WEBSITE_RANKINGS_URL:     process.env.WEBSITE_RANKINGS_URL,
   SERVER_URL:               process.env.SERVER_URL,
