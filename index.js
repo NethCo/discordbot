@@ -3,9 +3,9 @@ const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { connectDB } = require("./db");
 const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
-const { updateLeaderboard }        = require("./leaderboard");
+const { updateLeaderboard, refreshLeaderboardLayoutOnStartup } = require("./leaderboard");
 const { syncCharacterStats }       = require("./syncStats");
-const { updateLivesMessage }       = require("./lives");
+const { updateLivesMessage, refreshLivesLayoutOnStartup } = require("./lives");
 const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = require("./verification");
 const { handleInteractions }       = require("./interactions");
 const { handleSetupCommand }       = require("./setup");
@@ -105,11 +105,8 @@ client.once("ready", async () => {
 
   scheduleDailyLeaderboard(client);
 
-  await syncCharacterStats();
-
-  await updateLeaderboard(client);
-
-  await updateLivesMessage(client);
+  await refreshLeaderboardLayoutOnStartup(client);
+  await refreshLivesLayoutOnStartup(client);
   setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
 
   scheduleDailyStatusRefresh();

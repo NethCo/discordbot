@@ -200,6 +200,55 @@ async function ensureLeaderboardFooter(client) {
   return getLeaderboardUpdatedLine();
 }
 
+async function resolveLeaderboardMessageId(channel, client, config) {
+  if (config.leaderboardMessageId) return config.leaderboardMessageId;
+
+  try {
+    const messages = await channel.messages.fetch({ limit: 25 });
+    const match = messages.find(
+      (m) => m.author?.id === client.user.id
+        && String(m.embeds[0]?.title || "").includes(LEADERBOARD_TITLE),
+    );
+    if (match) {
+      await upsertGuildConfig(config.guildId, { leaderboardMessageId: match.id });
+      return match.id;
+    }
+  } catch {}
+
+  return null;
+}
+
+/** Startup / deploy — edit existing message, keep timestamp, no new post if none found. */
+async function refreshLeaderboardLayoutOnStartup(client) {
+  const configs = await getGuildsWithLeaderboard();
+
+  for (const config of configs) {
+    try {
+      const channel = await client.channels.fetch(config.leaderboardChannelId);
+      if (!channel) continue;
+
+      const messageId = await resolveLeaderboardMessageId(channel, client, config);
+      if (!messageId) {
+        console.log(`⏭️  Leaderboard: no message in channel (${config.guildId}) — skipping startup`);
+        continue;
+      }
+
+      const msg = await channel.messages.fetch(messageId);
+      const existingLine = readUpdatedLineFromEmbed(msg.embeds[0]);
+      const updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
+      setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
+
+      const top10 = await getTop10();
+      const embed = buildLeaderboardEmbed(top10, client, updatedAt);
+      const row = buildLeaderboardButtons();
+      await msg.edit({ embeds: [embed], components: [row] });
+      console.log(`✅ Leaderboard layout refreshed on startup (${config.guildId})`);
+    } catch (err) {
+      console.warn(`⚠️  Leaderboard startup (${config.guildId}): ${err.message}`);
+    }
+  }
+}
+
 function worldTag(world) {
   return `[${String(world || "—").trim() || "—"}]`;
 }
@@ -325,7 +374,7 @@ async function updateGuildLeaderboard(client, config, { refreshTimestamp = true 
 
   const top10 = await getTop10();
   const row = buildLeaderboardButtons();
-  const messageId = config.leaderboardMessageId || null;
+  const messageId = await resolveLeaderboardMessageId(channel, client, config);
 
   if (messageId) {
     try {
@@ -379,6 +428,7 @@ async function updateLeaderboard(client, options = {}) {
 
 module.exports = {
   updateLeaderboard,
+  refreshLeaderboardLayoutOnStartup,
   getCharacterRank,
   getCharacterWorldRank,
   getCharactersAroundRank,

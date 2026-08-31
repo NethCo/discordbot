@@ -6,7 +6,11 @@ const {
   KICK_CLIENT_SECRET,
 } = require("./config");
 const { getGuildsWithLives, upsertGuildConfig, worldsLabel } = require("./lib/guildConfig");
-const { applyUpdatedLine } = require("./lib/embedUpdatedLine");
+const {
+  applyUpdatedLine,
+  parseUpdatedAtFromLine,
+  readUpdatedLineFromEmbed,
+} = require("./lib/embedUpdatedLine");
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -291,6 +295,60 @@ function applyLivesUpdatedLine(embed, updatedAt = Date.now()) {
   return applyUpdatedLine(embed, updatedAt, livesUpdatedIntervalText());
 }
 
+async function resolveLivesMessage(channel, client, config) {
+  let msg = null;
+
+  if (config.livesMessageId) {
+    try {
+      msg = await channel.messages.fetch(config.livesMessageId);
+    } catch {}
+  }
+
+  if (!msg) {
+    const messages = await channel.messages.fetch({ limit: 15 });
+    msg = messages.find(
+      (m) => m.author?.id === client.user.id
+        && String(m.embeds[0]?.title || "").includes(LIVES_TITLE),
+    );
+    if (msg) {
+      await upsertGuildConfig(config.guildId, { livesMessageId: msg.id });
+    }
+  }
+
+  return msg;
+}
+
+/** Startup / deploy — edit existing message layout only, no Twitch/Kick API. */
+async function refreshLivesLayoutOnStartup(client) {
+  const configs = await getGuildsWithLives();
+
+  for (const config of configs) {
+    try {
+      const channel = await client.channels.fetch(config.livesChannelId);
+      if (!channel) continue;
+
+      const msg = await resolveLivesMessage(channel, client, config);
+      if (!msg?.embeds[0]) {
+        console.log(`⏭️  Lives: no message in channel (${config.guildId}) — skipping startup`);
+        continue;
+      }
+
+      const existingLine = readUpdatedLineFromEmbed(msg.embeds[0]);
+      const updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
+
+      let embed = EmbedBuilder.from(msg.embeds[0])
+        .setTitle(LIVES_TITLE)
+        .setColor(LIVE_EMBED_COLOR);
+      embed = applyLivesUpdatedLine(embed, updatedAt);
+
+      await msg.edit({ embeds: [embed], components: [] });
+      console.log(`✅ Lives layout refreshed on startup (${config.guildId}, no API)`);
+    } catch (err) {
+      console.warn(`⚠️  Lives startup (${config.guildId}): ${err.message}`);
+    }
+  }
+}
+
 async function updateGuildLives(client, config, supported, liveData) {
   const channel = await client.channels.fetch(config.livesChannelId);
   if (!channel) {
@@ -400,4 +458,4 @@ async function updateLivesMessage(client) {
   }
 }
 
-module.exports = { updateLivesMessage };
+module.exports = { updateLivesMessage, refreshLivesLayoutOnStartup };
