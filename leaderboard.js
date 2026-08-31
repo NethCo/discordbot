@@ -2,13 +2,18 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("
 const Character = require("./models/Character");
 const User = require("./models/User");
 const { WEBSITE_RANKINGS_URL } = require("./config");
+const {
+  applyUpdatedLine,
+  buildUpdatedLine,
+  parseUpdatedAtFromLine,
+  readUpdatedLineFromEmbed,
+} = require("./lib/embedUpdatedLine");
 const { getGuildsWithLeaderboard, upsertGuildConfig } = require("./lib/guildConfig");
-const { formatLevelExpPercent } = require("./lib/expToNextLevel");
+const { formatLevelExpPercent, formatLevelWithExpPercent } = require("./lib/expToNextLevel");
 const { buildProfileUrl } = require("./lib/profileUrl");
 const { characterAvatarUrl, extractCharacterImg } = require("./lib/avatars");
 
 const LEADERBOARD_TITLE = "Rankings Leaderboard";
-const ROW_SEPARATOR = `\n\u200E\n`;
 const LRM = "\u200E";
 const MEDALS = ["🥇", "🥈", "🥉"];
 
@@ -37,11 +42,13 @@ async function attachProfileUrls(characters) {
 
 async function getCharacterRank(charData, world = null) {
   const filter = world ? { world } : {};
+  const lvl = charData.lvl || 0;
+  const exp = charData.exp || 0;
   const count = await Character.countDocuments({
     ...filter,
     $or: [
-      { lvl: { $gt: charData.lvl || 0 } },
-      { lvl: charData.lvl || 0, exp: { $lte: charData.exp || 0 } },
+      { lvl: { $gt: lvl } },
+      { lvl, exp: { $gt: exp } },
     ],
   });
   return count + 1;
@@ -94,93 +101,261 @@ async function getUserCharacters(discordId) {
   };
 }
 
-function rankBadge(rank) {
-  return MEDALS[rank - 1] || `${rank}.`;
+async function getCharactersAroundRank(charData, world = null) {
+  const filter = world ? { world } : {};
+  const lvl = charData.lvl || 0;
+  const exp = charData.exp || 0;
+  const charId = String(charData.id || charData._id || "");
+
+  const aboveFilter = {
+    ...filter,
+    $or: [{ lvl: { $gt: lvl } }, { lvl, exp: { $gt: exp } }],
+  };
+  const belowFilter = {
+    ...filter,
+    $or: [{ lvl: { $lt: lvl } }, { lvl, exp: { $lt: exp } }],
+  };
+
+  const aboveCount = await Character.countDocuments(aboveFilter);
+  const skipAbove = Math.max(0, aboveCount - 2);
+
+  const [above, below] = await Promise.all([
+    Character.find(aboveFilter)
+      .sort({ lvl: -1, exp: -1, _id: 1 })
+      .skip(skipAbove)
+      .limit(2)
+      .lean(),
+    Character.find(belowFilter)
+      .sort({ lvl: -1, exp: -1, _id: 1 })
+      .limit(2)
+      .lean(),
+  ]);
+
+  const rank = aboveCount + 1;
+  const ordered = [...above, charData, ...below];
+
+  return ordered.map((doc, i) => ({
+    ...doc,
+    rank: rank - above.length + i,
+    id: (doc._id || doc.id).toString(),
+    isCurrent: (doc._id || doc.id).toString() === charId,
+  }));
 }
 
-function worldBadge(world) {
-  const label = String(world || "—").trim() || "—";
-  return `\`[${label}]\``;
+function formatLvJobWorldLine(charData, fractionDigits = 2) {
+  const job = String(charData.job || "—").trim() || "—";
+  const world = String(charData.world || "—").trim() || "—";
+  if (Number(charData.lvl) >= 300) {
+    return `Lv. ${charData.lvl}, ${job} in ${world}`;
+  }
+  const pct = formatLevelExpPercent(charData.lvl, charData.exp, fractionDigits);
+  return `Lv. ${charData.lvl} (${pct}), ${job} in ${world}`;
+}
+
+const LEADERBOARD_UPDATE_INTERVAL_TEXT = "מתעדכן כל 24 שעות";
+
+function buildFreshUpdatedLine(updatedAt = Date.now()) {
+  return buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT);
+}
+
+let cachedLeaderboardUpdatedLine = null;
+
+function setLeaderboardUpdatedLine(text) {
+  cachedLeaderboardUpdatedLine = text;
+}
+
+function getLeaderboardUpdatedLine() {
+  return cachedLeaderboardUpdatedLine || buildFreshUpdatedLine();
+}
+
+async function readUpdatedLineFromLeaderboardMessage(client, channelId, messageId) {
+  if (!channelId || !messageId) return null;
+  try {
+    const channel = await client.channels.fetch(channelId);
+    const msg = await channel.messages.fetch(messageId);
+    return readUpdatedLineFromEmbed(msg.embeds[0]);
+  } catch {
+    return null;
+  }
+}
+
+/** My Rank uses the same Updated line as the leaderboard message. */
+async function ensureLeaderboardFooter(client) {
+  if (cachedLeaderboardUpdatedLine) return cachedLeaderboardUpdatedLine;
+
+  const configs = await getGuildsWithLeaderboard();
+  for (const cfg of configs) {
+    if (!cfg.leaderboardChannelId || !cfg.leaderboardMessageId) continue;
+    const fromMessage = await readUpdatedLineFromLeaderboardMessage(
+      client,
+      cfg.leaderboardChannelId,
+      cfg.leaderboardMessageId,
+    );
+    if (fromMessage) {
+      setLeaderboardUpdatedLine(fromMessage);
+      return fromMessage;
+    }
+  }
+
+  return getLeaderboardUpdatedLine();
+}
+
+function worldTag(world) {
+  return `[${String(world || "—").trim() || "—"}]`;
+}
+
+function formatJobName(c) {
+  return String(c.job || "—").trim() || "—";
 }
 
 function formatPlayerName(c) {
-  const name = String(c.name || "—");
-  return c.profileUrl ? `[${name}](${c.profileUrl})` : name;
+  return String(c.name || "—");
 }
 
-function formatPlayerLine(c) {
-  return `${LRM}${rankBadge(c.rank)} ${worldBadge(c.world)} ${formatPlayerName(c)}`;
+const COLUMN_GAP = "\u2003\u2003";
+const PLAYER_WRAP = 30;
+
+function formatRankPart(rank) {
+  return rank <= 3 ? `${MEDALS[rank - 1]} ` : `${String(rank).padStart(2, " ")}. `;
 }
 
-function formatJobLine(c) {
-  return `${LRM}${String(c.job || "—").trim() || "—"}`;
+function wrapWords(text, maxLen) {
+  const lines = [];
+  let current = "";
+
+  for (const word of String(text).split(/\s+/).filter(Boolean)) {
+    let candidate = current ? `${current} ${word}` : word;
+    while (candidate.length > maxLen) {
+      if (current) {
+        lines.push(current);
+        current = "";
+        candidate = word;
+        continue;
+      }
+      lines.push(candidate.slice(0, maxLen));
+      candidate = candidate.slice(maxLen);
+    }
+    current = candidate;
+  }
+
+  if (current) lines.push(current);
+  return lines.length ? lines : ["—"];
 }
 
-function formatLevelLine(c) {
-  const pct = formatLevelExpPercent(c.lvl, c.exp);
-  return `${LRM}**${c.lvl}** (${pct})`;
+function splitPlayerLines(c, withArrow = false) {
+  const arrow = withArrow && c.isCurrent ? "➡️" : "";
+  const head = `${LRM}${arrow}${formatRankPart(c.rank)}${worldTag(c.world)} `;
+  const name = formatPlayerName(c);
+  const oneLine = `${head}${name}${COLUMN_GAP}`;
+  if (oneLine.length <= PLAYER_WRAP) return [oneLine];
+
+  const nameLines = wrapWords(name, Math.max(6, PLAYER_WRAP - head.length));
+  const lines = [`${head}${nameLines[0]}`];
+  for (let i = 1; i < nameLines.length; i++) {
+    const last = i === nameLines.length - 1;
+    lines.push(`${LRM}${nameLines[i]}${last ? COLUMN_GAP : ""}`);
+  }
+  return lines;
+}
+
+function buildRankRow(c, withArrow = false) {
+  const playerLines = splitPlayerLines(c, withArrow);
+  const jobLine = `${LRM}${formatJobName(c)}${COLUMN_GAP}`;
+  const levelLine = `${LRM}${formatLevelWithExpPercent(c.lvl, c.exp)}`;
+  const pad = (line) => [line, ...Array(Math.max(0, playerLines.length - 1)).fill(LRM)].join("\n");
+
+  return {
+    player: playerLines.join("\n"),
+    job: pad(jobLine),
+    level: pad(levelLine),
+  };
 }
 
 function joinColumn(lines) {
-  return lines.join(ROW_SEPARATOR);
+  return lines.length ? lines.join("\n") : "—";
 }
 
-function buildLeaderboardEmbed(top10, client) {
-  const now = new Date().toLocaleString("en-GB", { timeZone: "Asia/Jerusalem" });
-
-  if (!top10.length) {
-    return new EmbedBuilder()
-      .setColor(0xff6600)
-      .setTitle(LEADERBOARD_TITLE)
-      .setDescription("No ranked characters yet.")
-      .setFooter({ text: `MSIsrael.gg • Updated: ${now}`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
+function buildTableFields(rows, withArrow = false) {
+  if (!rows.length) {
+    return [
+      { name: "Player", value: "—", inline: true },
+      { name: "Job", value: "—", inline: true },
+      { name: "Level", value: "—", inline: true },
+    ];
   }
 
-  return new EmbedBuilder()
+  const built = rows.map((c) => buildRankRow(c, withArrow));
+
+  return [
+    { name: "Player", value: joinColumn(built.map((r) => r.player)), inline: true },
+    { name: "Job", value: joinColumn(built.map((r) => r.job)), inline: true },
+    { name: "Level", value: joinColumn(built.map((r) => r.level)), inline: true },
+  ];
+}
+
+function buildRankNeighborFields(neighbors) {
+  return buildTableFields(neighbors, true);
+}
+
+function buildLeaderboardEmbed(top10, client, updatedAt = Date.now()) {
+  let embed = new EmbedBuilder()
     .setColor(0xff6600)
-    .setTitle(LEADERBOARD_TITLE)
-    .addFields(
-      { name: "Player", value: joinColumn(top10.map(formatPlayerLine)), inline: true },
-      { name: "Job", value: joinColumn(top10.map(formatJobLine)), inline: true },
-      { name: "Level", value: joinColumn(top10.map(formatLevelLine)), inline: true },
-    )
-    .setFooter({ text: `MSIsrael.gg • Updated: ${now}`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
+    .setTitle(LEADERBOARD_TITLE);
+
+  embed = top10.length
+    ? embed.addFields(...buildTableFields(top10, false))
+    : embed.setDescription("No ranked characters yet.");
+
+  return applyUpdatedLine(embed, updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT);
 }
 
 function buildLeaderboardButtons() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("my_rank").setLabel("My Rank 📊").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setLabel("Full Rankings 🌐").setStyle(ButtonStyle.Link).setURL(WEBSITE_RANKINGS_URL),
+    new ButtonBuilder().setCustomId("my_rank").setLabel("הדירוג שלי 📊").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setLabel("לרשימה המלאה באתר 🌐").setStyle(ButtonStyle.Link).setURL(WEBSITE_RANKINGS_URL),
   );
 }
 
-async function updateGuildLeaderboard(client, config) {
+async function updateGuildLeaderboard(client, config, { refreshTimestamp = true } = {}) {
   const channel = await client.channels.fetch(config.leaderboardChannelId);
   if (!channel) {
     console.error(`❌ Leaderboard channel not found (guild ${config.guildId})`);
     return false;
   }
 
-  const top10 = await attachProfileUrls(await getTop10());
-  const embed = buildLeaderboardEmbed(top10, client);
+  const top10 = await getTop10();
   const row = buildLeaderboardButtons();
+  const messageId = config.leaderboardMessageId || null;
 
-  if (config.leaderboardMessageId) {
+  if (messageId) {
     try {
-      const msg = await channel.messages.fetch(config.leaderboardMessageId);
+      const msg = await channel.messages.fetch(messageId);
+      let updatedAt = Date.now();
+      if (!refreshTimestamp) {
+        const existingLine = readUpdatedLineFromEmbed(msg.embeds[0])
+          || cachedLeaderboardUpdatedLine;
+        updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
+      }
+      setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
+
+      const embed = buildLeaderboardEmbed(top10, client, updatedAt);
       await msg.edit({ embeds: [embed], components: [row] });
-      console.log(`✅ Leaderboard updated (${config.guildId})`);
+      console.log(`✅ Leaderboard updated (${config.guildId})${refreshTimestamp ? "" : " — layout only, timestamp kept"}`);
       return true;
     } catch {}
   }
 
+  const updatedAt = Date.now();
+  setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
+  const embed = buildLeaderboardEmbed(top10, client, updatedAt);
+
   const msg = await channel.send({ embeds: [embed], components: [row] });
   await upsertGuildConfig(config.guildId, { leaderboardMessageId: msg.id });
-  console.log(`✅ Leaderboard posted (${config.guildId}):`, msg.id);
+  console.log(`✅ Leaderboard posted (${config.guildId}): message ${msg.id}`);
   return true;
 }
 
-async function updateLeaderboard(client) {
+async function updateLeaderboard(client, options = {}) {
   try {
     const configs = await getGuildsWithLeaderboard();
     if (!configs.length) {
@@ -191,7 +366,7 @@ async function updateLeaderboard(client) {
     let ok = 0;
     for (const config of configs) {
       try {
-        if (await updateGuildLeaderboard(client, config)) ok += 1;
+        if (await updateGuildLeaderboard(client, config, options)) ok += 1;
       } catch (err) {
         console.error(`❌ Leaderboard error (${config.guildId}):`, err.message);
       }
@@ -206,10 +381,16 @@ module.exports = {
   updateLeaderboard,
   getCharacterRank,
   getCharacterWorldRank,
+  getCharactersAroundRank,
   getUserCharacters,
   getTop10,
   attachProfileUrls,
   resolveCharacterAvatar,
   formatLevelExpPercent,
+  formatLevelWithExpPercent,
+  formatLvJobWorldLine,
+  ensureLeaderboardFooter,
+  buildRankNeighborFields,
   buildProfileUrl,
+  LEADERBOARD_UPDATE_INTERVAL_TEXT,
 };

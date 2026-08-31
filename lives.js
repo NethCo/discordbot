@@ -6,6 +6,7 @@ const {
   KICK_CLIENT_SECRET,
 } = require("./config");
 const { getGuildsWithLives, upsertGuildConfig, worldsLabel } = require("./lib/guildConfig");
+const { applyUpdatedLine } = require("./lib/embedUpdatedLine");
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -282,6 +283,14 @@ async function buildLiveData(streamers) {
   return { supported, liveData };
 }
 
+function livesUpdatedIntervalText() {
+  return `מתעדכן כל ${LIVES_UPDATE_INTERVAL_MINUTES} דקות`;
+}
+
+function applyLivesUpdatedLine(embed, updatedAt = Date.now()) {
+  return applyUpdatedLine(embed, updatedAt, livesUpdatedIntervalText());
+}
+
 async function updateGuildLives(client, config, supported, liveData) {
   const channel = await client.channels.fetch(config.livesChannelId);
   if (!channel) {
@@ -300,17 +309,16 @@ async function updateGuildLives(client, config, supported, liveData) {
   );
 
   const savedId = config.livesMessageId;
-  const now = new Date().toLocaleString("en-GB", { timeZone: "Asia/Jerusalem" });
+  const updatedAt = Date.now();
 
   if (liveStreamers.length === 0) {
-    const noLiveEmbed = new EmbedBuilder()
-      .setColor(LIVE_EMBED_COLOR)
-      .setTitle(LIVES_TITLE)
-      .setDescription("No live streams right now.")
-      .setFooter({
-        text: `MSIsrael.gg • Updated: ${now} • Refreshes every ${LIVES_UPDATE_INTERVAL_MINUTES} min`,
-        iconURL: client.user?.displayAvatarURL({ dynamic: true }),
-      });
+    const noLiveEmbed = applyLivesUpdatedLine(
+      new EmbedBuilder()
+        .setColor(LIVE_EMBED_COLOR)
+        .setTitle(LIVES_TITLE)
+        .setDescription("No live streams right now."),
+      updatedAt,
+    );
 
     if (savedId) {
       try {
@@ -345,18 +353,17 @@ async function updateGuildLives(client, config, supported, liveData) {
   const statusColumn = joinColumn(shownRows, "status");
   const viewersColumn = joinColumn(shownRows, "viewers");
 
-  const embed = new EmbedBuilder()
-    .setColor(LIVE_EMBED_COLOR)
-    .setTitle(LIVES_TITLE)
-    .addFields(
-      { name: "Streamer", value: streamerColumn || "—", inline: true },
-      { name: "Status", value: statusColumn || "—", inline: true },
-      { name: "Viewers", value: viewersColumn || "—", inline: true },
-    )
-    .setFooter({
-      text: `MSIsrael.gg • Updated: ${now} • Refreshes every ${LIVES_UPDATE_INTERVAL_MINUTES} min`,
-      iconURL: client.user?.displayAvatarURL({ dynamic: true }),
-    });
+  const embed = applyLivesUpdatedLine(
+    new EmbedBuilder()
+      .setColor(LIVE_EMBED_COLOR)
+      .setTitle(LIVES_TITLE)
+      .addFields(
+        { name: "Streamer", value: streamerColumn || "—", inline: true },
+        { name: "Status", value: statusColumn || "—", inline: true },
+        { name: "Viewers", value: viewersColumn || "—", inline: true },
+      ),
+    updatedAt,
+  );
 
   if (savedId) {
     try {

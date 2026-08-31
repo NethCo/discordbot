@@ -3,14 +3,16 @@ const PendingCharacter = require("./models/PendingCharacter");
 const Character = require("./models/Character");
 const User = require("./models/User");
 const { WEBSITE_RANKINGS_URL } = require("./config");
+const { applyUpdatedLine, parseUpdatedAtFromLine } = require("./lib/embedUpdatedLine");
 const {
   getUserCharacters,
-  getCharacterRank,
-  getCharacterWorldRank,
+  getCharactersAroundRank,
   attachProfileUrls,
   resolveCharacterAvatar,
-  formatLevelExpPercent,
-  buildProfileUrl,
+  formatLvJobWorldLine,
+  ensureLeaderboardFooter,
+  buildRankNeighborFields,
+  LEADERBOARD_UPDATE_INTERVAL_TEXT,
 } = require("./leaderboard");
 const { updateAllAdminRequestMessages } = require("./verification");
 const { ALLOWED_WORLDS, fetchOverall, fetchFame } = require("./lib/nexonCharacter");
@@ -34,53 +36,80 @@ function getUserRankCache(discordId, charId) {
   return cache.byId.get(charId) || null;
 }
 
-function buildPersonalRankEmbed({ charData, globalRank, worldRank, profileUrl, avatarUrl }) {
-  const pct = formatLevelExpPercent(charData.lvl, charData.exp);
+async function buildPersonalRankEmbed({ charData, neighbors, avatarUrl, client }) {
   const name = String(charData.name || "Character");
-  const job = String(charData.job || "—").trim() || "—";
-  const world = String(charData.world || "—").trim() || "—";
+  const statsLine = formatLvJobWorldLine(charData);
+  const updatedLine = await ensureLeaderboardFooter(client);
+  const updatedAt = parseUpdatedAtFromLine(updatedLine) || Date.now();
 
-  const embed = new EmbedBuilder()
+  let embed = new EmbedBuilder()
     .setColor(0xff6600)
+    .setTitle(name)
     .setAuthor({
-      name,
-      url: profileUrl || undefined,
+      name: "MSIsrael.gg",
+      url: WEBSITE_RANKINGS_URL,
     })
-    .setDescription(
-      `Lv **${charData.lvl}** (${pct})\n` +
-      `${job} in **${world}**\n\n` +
-      `Overall · **#${globalRank}**\n` +
-      `${world} · **#${worldRank ?? "—"}**`,
-    )
-    .setFooter({ text: "MSIsrael.gg" });
+    .setDescription(`\u200E${statsLine}`)
+    .addFields(...buildRankNeighborFields(neighbors));
+
+  embed = applyUpdatedLine(embed, updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT);
 
   if (avatarUrl) {
-    embed.setImage(avatarUrl);
-  }
-
-  if (profileUrl) {
-    embed.setURL(profileUrl);
+    embed.setThumbnail(avatarUrl);
   }
 
   return embed;
 }
 
-async function replyWithPersonalRank(interaction, charData, discordUserId) {
-  const [globalRank, worldRank, avatarUrl] = await Promise.all([
-    getCharacterRank(charData),
-    getCharacterWorldRank(charData),
+async function replyWithPersonalRank(interaction, charData) {
+  const [neighbors, avatarUrl] = await Promise.all([
+    getCharactersAroundRank(charData),
     resolveCharacterAvatar(charData),
   ]);
-  const profileUrl = charData.profileUrl || buildProfileUrl(discordUserId);
-  const embed = buildPersonalRankEmbed({
+  const embed = await buildPersonalRankEmbed({
     charData,
-    globalRank,
-    worldRank,
-    profileUrl,
+    neighbors,
     avatarUrl,
+    client: interaction.client,
   });
 
   await interaction.editReply({ content: null, embeds: [embed], components: [] });
+  setTimeout(async () => { try { await interaction.deleteReply(); } catch {} }, 60_000);
+}
+
+async function handleMyRankRequest(interaction, discordUserId) {
+  const result = await getUserCharacters(discordUserId);
+  if (result.status === "no_account") {
+    await interaction.editReply({
+      content: `No linked account found. Sign in at **${WEBSITE_RANKINGS_URL}**`,
+    });
+    return;
+  }
+  if (result.status === "no_characters") {
+    await interaction.editReply({ content: "Your account has no registered characters yet." });
+    return;
+  }
+
+  const [characters] = await Promise.all([attachProfileUrls(result.characters)]);
+  saveUserRankCache(discordUserId, characters);
+
+  if (characters.length === 1) {
+    await replyWithPersonalRank(interaction, characters[0]);
+    return;
+  }
+
+  const row = new ActionRowBuilder().addComponents(
+    characters.map((c) =>
+      new ButtonBuilder()
+        .setCustomId(`rank_char_${c.id}`)
+        .setLabel(`${c.name} (${c.lvl})`)
+        .setStyle(ButtonStyle.Secondary),
+    ),
+  );
+  await interaction.editReply({
+    content: "Select a character to view your rank:",
+    components: [row],
+  });
   setTimeout(async () => { try { await interaction.deleteReply(); } catch {} }, 60_000);
 }
 
@@ -91,39 +120,7 @@ async function handleInteractions(client) {
     if (interaction.customId === "my_rank") {
       try { await interaction.deferReply({ flags: 64 }); } catch { return; }
       try {
-        const result = await getUserCharacters(interaction.user.id);
-        if (result.status === "no_account") {
-          return interaction.editReply({
-            content: `No linked account found. Sign in at **${WEBSITE_RANKINGS_URL}**`,
-          });
-        }
-        if (result.status === "no_characters") {
-          return interaction.editReply({ content: "Your account has no registered characters yet." });
-        }
-
-        const [characters] = await Promise.all([
-          attachProfileUrls(result.characters),
-        ]);
-        saveUserRankCache(interaction.user.id, characters);
-
-        if (characters.length === 1) {
-          await replyWithPersonalRank(interaction, characters[0], interaction.user.id);
-          return;
-        }
-
-        const row = new ActionRowBuilder().addComponents(
-          characters.map((c) =>
-            new ButtonBuilder()
-              .setCustomId(`rank_char_${c.id}`)
-              .setLabel(`${c.name} (${c.lvl})`)
-              .setStyle(ButtonStyle.Secondary),
-          ),
-        );
-        await interaction.editReply({
-          content: "Select a character to view your rank:",
-          components: [row],
-        });
-        setTimeout(async () => { try { await interaction.deleteReply(); } catch {} }, 60_000);
+        await handleMyRankRequest(interaction, interaction.user.id);
       } catch (err) {
         console.error("my_rank error:", err);
         await interaction.editReply({ content: "Something went wrong. Please try again later." });
@@ -151,7 +148,7 @@ async function handleInteractions(client) {
 
         if (!charData) return interaction.editReply({ content: "Character not found." });
 
-        await replyWithPersonalRank(interaction, charData, interaction.user.id);
+        await replyWithPersonalRank(interaction, charData);
       } catch (err) {
         console.error("rank_char error:", err);
         await interaction.editReply({ content: "Something went wrong. Please try again later." });

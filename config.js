@@ -1,4 +1,4 @@
-const LIVES_UPDATE_INTERVAL_MINUTES = 20;
+const LIVES_UPDATE_INTERVAL_MINUTES = 15;
 
 module.exports = {
   DISCORD_TOKEN:            process.env.DISCORD_TOKEN,
