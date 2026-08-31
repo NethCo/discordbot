@@ -2,7 +2,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("
 const Character = require("./models/Character");
 const User = require("./models/User");
 const { WEBSITE_RANKINGS_URL, LEADERBOARD_CHANNEL_ID, LEADERBOARD_MESSAGE_ID } = require("./config");
-const { findBotEmbedMessage } = require("./lib/findBotMessage");
+const { fetchMessageByIds } = require("./lib/findBotMessage");
 const {
   applyUpdatedLine,
   buildUpdatedLine,
@@ -214,45 +214,17 @@ function leaderboardMessageIds(config) {
   return ids;
 }
 
-function isLeaderboardEmbed(embed) {
-  return String(embed?.title || "").includes(LEADERBOARD_TITLE);
-}
-
 async function resolveLeaderboardMessage(channel, client, config) {
-  const msg = await findBotEmbedMessage(channel, client, {
-    ids: leaderboardMessageIds(config),
-    matchEmbed: isLeaderboardEmbed,
-  });
-  if (msg && msg.id !== config.leaderboardMessageId) {
-    await upsertGuildConfig(config.guildId, { leaderboardMessageId: msg.id });
-  }
-  return msg;
+  return fetchMessageByIds(channel, client, leaderboardMessageIds(config));
 }
 
-/** Startup / deploy — edit existing message, keep timestamp, no new post if none found. */
+/** Startup / deploy — edit existing message or post a new one if no saved ID works. */
 async function refreshLeaderboardLayoutOnStartup(client) {
   const configs = await getGuildsWithLeaderboard();
 
   for (const config of configs) {
     try {
-      const channel = await client.channels.fetch(config.leaderboardChannelId);
-      if (!channel) continue;
-
-      const msg = await resolveLeaderboardMessage(channel, client, config);
-      if (!msg) {
-        console.log(`⏭️  Leaderboard: no message in channel (${config.guildId}) — skipping startup`);
-        continue;
-      }
-
-      const existingLine = readUpdatedLineFromEmbed(msg.embeds[0]);
-      const updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
-      setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
-
-      const top10 = await getTop10();
-      const embed = buildLeaderboardEmbed(top10, client, updatedAt);
-      const row = buildLeaderboardButtons();
-      await msg.edit({ embeds: [embed], components: [row] });
-      console.log(`✅ Leaderboard layout refreshed on startup (${config.guildId})`);
+      await updateGuildLeaderboard(client, config, { refreshTimestamp: false });
     } catch (err) {
       console.warn(`⚠️  Leaderboard startup (${config.guildId}): ${err.message}`);
     }

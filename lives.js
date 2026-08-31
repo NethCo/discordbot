@@ -13,7 +13,7 @@ const {
   parseUpdatedAtFromLine,
   readUpdatedLineFromEmbed,
 } = require("./lib/embedUpdatedLine");
-const { findBotEmbedMessage } = require("./lib/findBotMessage");
+const { fetchMessageByIds } = require("./lib/findBotMessage");
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -298,11 +298,6 @@ function applyLivesUpdatedLine(embed, updatedAt = Date.now()) {
   return applyUpdatedLine(embed, updatedAt, livesUpdatedIntervalText());
 }
 
-function isLivesEmbed(embed) {
-  if (String(embed?.title || "").includes(LIVES_TITLE)) return true;
-  return (embed?.fields || []).some((f) => f.name === "Streamer");
-}
-
 function livesMessageIds(config) {
   const ids = [];
   if (
@@ -317,19 +312,16 @@ function livesMessageIds(config) {
 }
 
 async function resolveLivesMessage(channel, client, config) {
-  const msg = await findBotEmbedMessage(channel, client, {
-    ids: livesMessageIds(config),
-    matchEmbed: isLivesEmbed,
-  });
-  if (msg && msg.id !== config.livesMessageId) {
-    await upsertGuildConfig(config.guildId, { livesMessageId: msg.id });
-  }
-  return msg;
+  return fetchMessageByIds(channel, client, livesMessageIds(config));
 }
 
-/** Startup / deploy — edit existing message layout only, no Twitch/Kick API. */
+/** Startup / deploy — edit layout if ID works, otherwise post a fresh lives message. */
 async function refreshLivesLayoutOnStartup(client) {
   const configs = await getGuildsWithLives();
+  if (!configs.length) return;
+
+  const streamers = await getApprovedStreamers();
+  const { supported, liveData } = await buildLiveData(streamers);
 
   for (const config of configs) {
     try {
@@ -337,21 +329,21 @@ async function refreshLivesLayoutOnStartup(client) {
       if (!channel) continue;
 
       const msg = await resolveLivesMessage(channel, client, config);
-      if (!msg?.embeds[0]) {
-        console.log(`⏭️  Lives: no message in channel (${config.guildId}) — skipping startup`);
-        continue;
+      if (msg?.embeds[0]) {
+        const existingLine = readUpdatedLineFromEmbed(msg.embeds[0]);
+        const updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
+
+        let embed = EmbedBuilder.from(msg.embeds[0])
+          .setTitle(LIVES_TITLE)
+          .setColor(LIVE_EMBED_COLOR);
+        embed = applyLivesUpdatedLine(embed, updatedAt);
+
+        await msg.edit({ embeds: [embed], components: [] });
+        console.log(`✅ Lives layout refreshed on startup (${config.guildId}, no API)`);
+      } else {
+        await updateGuildLives(client, config, supported, liveData);
+        console.log(`✅ Lives posted on startup (${config.guildId}) — no saved message ID`);
       }
-
-      const existingLine = readUpdatedLineFromEmbed(msg.embeds[0]);
-      const updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
-
-      let embed = EmbedBuilder.from(msg.embeds[0])
-        .setTitle(LIVES_TITLE)
-        .setColor(LIVE_EMBED_COLOR);
-      embed = applyLivesUpdatedLine(embed, updatedAt);
-
-      await msg.edit({ embeds: [embed], components: [] });
-      console.log(`✅ Lives layout refreshed on startup (${config.guildId}, no API)`);
     } catch (err) {
       console.warn(`⚠️  Lives startup (${config.guildId}): ${err.message}`);
     }
