@@ -1,12 +1,11 @@
 const { EmbedBuilder } = require("discord.js");
-const BotSync = require("./models/BotSync");
 const {
-  LIVES_CHANNEL_ID,
   LIVES_UPDATE_INTERVAL_MINUTES,
   SERVER_URL,
   KICK_CLIENT_ID,
   KICK_CLIENT_SECRET,
 } = require("./config");
+const { getGuildsWithLives, upsertGuildConfig, worldsLabel } = require("./lib/guildConfig");
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -43,6 +42,11 @@ function originIcon(uid) {
 function platformBadge(platform) {
   const label = PLATFORM_LABELS[platform] || platform;
   return `\`[${label}]\``;
+}
+
+function filterStreamersByWorlds(streamers, worlds) {
+  if (!worlds?.length) return streamers;
+  return streamers.filter((s) => s.world && worlds.includes(s.world));
 }
 
 function streamerViewers(streamer, liveData) {
@@ -129,6 +133,8 @@ function fitRowsToEmbed(rows) {
   }
   return kept;
 }
+
+const LIVES_TITLE = "Live Streams";
 
 let kickToken = null;
 let kickTokenExpiry = 0;
@@ -246,134 +252,142 @@ async function getApprovedStreamers() {
   }
 }
 
-async function getLivesMessageId() {
-  const doc = await BotSync.findById("lives").lean();
-  return doc?.livesMessageId || null;
+async function buildLiveData(streamers) {
+  const supported = streamers.filter(
+    (s) => s.platform === "twitch" || s.platform === "kick",
+  );
+
+  const twitchIds = supported
+    .filter((s) => s.platform === "twitch")
+    .map((s) => String(s._id))
+    .filter(Boolean);
+  const kickIds = supported
+    .filter((s) => s.platform === "kick")
+    .map((s) => String(s._id))
+    .filter(Boolean);
+
+  const [twitchLive, kickLive] = await Promise.all([
+    fetchPlatformStreams("twitch", twitchIds),
+    fetchPlatformStreams("kick", kickIds),
+  ]);
+
+  const liveData = {};
+  for (const [id, info] of Object.entries(twitchLive)) {
+    liveData[liveKey("twitch", id)] = info;
+  }
+  for (const [id, info] of Object.entries(kickLive)) {
+    liveData[liveKey("kick", id)] = info;
+  }
+
+  return { supported, liveData };
 }
 
-async function saveLivesMessageId(id) {
-  await BotSync.findByIdAndUpdate("lives", { livesMessageId: id }, { upsert: true });
-}
+async function updateGuildLives(client, config, supported, liveData) {
+  const channel = await client.channels.fetch(config.livesChannelId);
+  if (!channel) {
+    console.error(`❌ ערוץ לייבים לא נמצא (guild ${config.guildId})`);
+    return;
+  }
 
-async function updateLivesMessage(client) {
-  try {
-    if (!LIVES_CHANNEL_ID) return;
-    const channel = await client.channels.fetch(LIVES_CHANNEL_ID);
-    if (!channel) return console.error("❌ ערוץ לייבים לא נמצא");
+  const scopedStreamers = filterStreamersByWorlds(supported, config.worlds);
+  const liveStreamers = sortLiveStreamers(
+    scopedStreamers.filter((s) => !!liveData[liveKey(s.platform, String(s._id))]),
+    liveData,
+  );
 
-    const streamers = await getApprovedStreamers();
-    const supported = streamers.filter(
-      (s) => s.platform === "twitch" || s.platform === "kick",
-    );
+  console.log(
+    `📺 לייבים (${config.guildId}, ${worldsLabel(config)}): ${scopedStreamers.length} ברשימה, ${liveStreamers.length} פעילים`,
+  );
 
-    const twitchIds = supported
-      .filter((s) => s.platform === "twitch")
-      .map((s) => String(s._id))
-      .filter(Boolean);
-    const kickIds = supported
-      .filter((s) => s.platform === "kick")
-      .map((s) => String(s._id))
-      .filter(Boolean);
+  const savedId = config.livesMessageId;
+  const now = new Date().toLocaleString("en-GB", { timeZone: "Asia/Jerusalem" });
 
-    const [twitchLive, kickLive] = await Promise.all([
-      fetchPlatformStreams("twitch", twitchIds),
-      fetchPlatformStreams("kick", kickIds),
-    ]);
-
-    const liveData = {};
-    for (const [id, info] of Object.entries(twitchLive)) {
-      liveData[liveKey("twitch", id)] = info;
-    }
-    for (const [id, info] of Object.entries(kickLive)) {
-      liveData[liveKey("kick", id)] = info;
-    }
-
-    const liveStreamers = sortLiveStreamers(
-      supported.filter((s) => !!liveData[liveKey(s.platform, String(s._id))]),
-      liveData,
-    );
-
-    const communityLive = liveStreamers.filter((s) => !isWorldStreamer(s.uid)).length;
-    const worldLive = liveStreamers.length - communityLive;
-
-    console.log(
-      `📺 לייבים: ${supported.length} ברשימה, ${liveStreamers.length} פעילים` +
-      ` (קהילה: ${communityLive}, בינלאומי: ${worldLive})`,
-    );
-
-    const savedId = await getLivesMessageId();
-    const now = new Date().toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" });
-
-    if (liveStreamers.length === 0) {
-      const noLiveEmbed = new EmbedBuilder()
-        .setColor(LIVE_EMBED_COLOR)
-        .setTitle("לייבים פעילים")
-        .setDescription("אין שידורים פעילים כרגע")
-        .setFooter({
-          text: `MSIsrael.gg • עודכן: ${now} • מתעדכן כל ${LIVES_UPDATE_INTERVAL_MINUTES} דקות`,
-          iconURL: client.user?.displayAvatarURL({ dynamic: true }),
-        });
-
-      if (savedId) {
-        try {
-          const msg = await channel.messages.fetch(savedId);
-          await msg.edit({ embeds: [noLiveEmbed], components: [] });
-          console.log("✅ הודעת לייבים עודכנה (אין לייבים)");
-          return;
-        } catch {}
-      }
-      const msg = await channel.send({ embeds: [noLiveEmbed] });
-      await saveLivesMessageId(msg.id);
-      console.log("✅ נשלחה הודעת לייבים (ריקה):", msg.id);
-      return;
-    }
-
-    const rows = liveStreamers.map((streamer) => {
-      const name = streamer.name;
-      const key = liveKey(streamer.platform, String(streamer._id));
-      const stream = liveData[key] || {};
-      const title = stream.title || "";
-      const viewers = (stream.viewers || 0).toLocaleString();
-      const login = stream.login || streamer.name;
-      const baseUrl = PLATFORM_URLS[streamer.platform] || PLATFORM_URLS.twitch;
-
-      return buildTableRow(
-        formatStreamerLine(streamer, name, `${baseUrl}${login}`),
-        title,
-        `${LRM}👁 ${viewers}`,
-      );
-    });
-
-    const shownRows = fitRowsToEmbed(rows);
-    const streamerColumn = joinColumn(shownRows, "streamer");
-    const statusColumn = joinColumn(shownRows, "status");
-    const viewersColumn = joinColumn(shownRows, "viewers");
-
-    const embed = new EmbedBuilder()
+  if (liveStreamers.length === 0) {
+    const noLiveEmbed = new EmbedBuilder()
       .setColor(LIVE_EMBED_COLOR)
-      .setTitle("לייבים פעילים")
-      .addFields(
-        { name: "שדרן", value: streamerColumn || "—", inline: true },
-        { name: "סטטוס", value: statusColumn || "—", inline: true },
-        { name: "צופים", value: viewersColumn || "—", inline: true },
-      )
+      .setTitle(LIVES_TITLE)
+      .setDescription("No live streams right now.")
       .setFooter({
-        text: `MSIsrael.gg • עודכן: ${now} • מתעדכן כל ${LIVES_UPDATE_INTERVAL_MINUTES} דקות`,
+        text: `MSIsrael.gg • Updated: ${now} • Refreshes every ${LIVES_UPDATE_INTERVAL_MINUTES} min`,
         iconURL: client.user?.displayAvatarURL({ dynamic: true }),
       });
 
     if (savedId) {
       try {
         const msg = await channel.messages.fetch(savedId);
-        await msg.edit({ embeds: [embed], components: [] });
-        console.log("✅ הודעת לייבים עודכנה");
+        await msg.edit({ embeds: [noLiveEmbed], components: [] });
         return;
       } catch {}
     }
+    const msg = await channel.send({ embeds: [noLiveEmbed] });
+    await upsertGuildConfig(config.guildId, { livesMessageId: msg.id });
+    return;
+  }
 
-    const msg = await channel.send({ embeds: [embed] });
-    await saveLivesMessageId(msg.id);
-    console.log("✅ נשלחה הודעת לייבים:", msg.id);
+  const rows = liveStreamers.map((streamer) => {
+    const name = streamer.name;
+    const key = liveKey(streamer.platform, String(streamer._id));
+    const stream = liveData[key] || {};
+    const titleText = stream.title || "";
+    const viewers = (stream.viewers || 0).toLocaleString();
+    const login = stream.login || streamer.name;
+    const baseUrl = PLATFORM_URLS[streamer.platform] || PLATFORM_URLS.twitch;
+
+    return buildTableRow(
+      formatStreamerLine(streamer, name, `${baseUrl}${login}`),
+      titleText,
+      `${LRM}👁 ${viewers}`,
+    );
+  });
+
+  const shownRows = fitRowsToEmbed(rows);
+  const streamerColumn = joinColumn(shownRows, "streamer");
+  const statusColumn = joinColumn(shownRows, "status");
+  const viewersColumn = joinColumn(shownRows, "viewers");
+
+  const embed = new EmbedBuilder()
+    .setColor(LIVE_EMBED_COLOR)
+    .setTitle(LIVES_TITLE)
+    .addFields(
+      { name: "Streamer", value: streamerColumn || "—", inline: true },
+      { name: "Status", value: statusColumn || "—", inline: true },
+      { name: "Viewers", value: viewersColumn || "—", inline: true },
+    )
+    .setFooter({
+      text: `MSIsrael.gg • Updated: ${now} • Refreshes every ${LIVES_UPDATE_INTERVAL_MINUTES} min`,
+      iconURL: client.user?.displayAvatarURL({ dynamic: true }),
+    });
+
+  if (savedId) {
+    try {
+      const msg = await channel.messages.fetch(savedId);
+      await msg.edit({ embeds: [embed], components: [] });
+      return;
+    } catch {}
+  }
+
+  const msg = await channel.send({ embeds: [embed] });
+  await upsertGuildConfig(config.guildId, { livesMessageId: msg.id });
+}
+
+async function updateLivesMessage(client) {
+  try {
+    const configs = await getGuildsWithLives();
+    if (!configs.length) {
+      console.warn("⚠️ אין שרתים עם ערוץ לייבים מוגדר");
+      return;
+    }
+
+    const streamers = await getApprovedStreamers();
+    const { supported, liveData } = await buildLiveData(streamers);
+
+    for (const config of configs) {
+      try {
+        await updateGuildLives(client, config, supported, liveData);
+      } catch (err) {
+        console.error(`❌ שגיאה בלייבים (${config.guildId}):`, err.stack || err.message);
+      }
+    }
   } catch (err) {
     console.error("❌ שגיאה בעדכון לייבים:", err.stack || err.message);
   }

@@ -3,6 +3,7 @@ const https = require("https");
 const PendingCharacter = require("./models/PendingCharacter");
 const User = require("./models/User");
 const { ADMIN_CHANNEL_ID } = require("./config");
+const { getGuildsForAdminWorld } = require("./lib/guildConfig");
 const { isDiscordSnowflake, resolveDiscordUserIdFromRequest, resolveHandlerMention } = require("./utils/discordIdentity");
 
 function downloadBuffer(url) {
@@ -14,6 +15,26 @@ function downloadBuffer(url) {
       res.on("error", reject);
     }).on("error", reject);
   });
+}
+
+function buildAdminEmbed(req, discordId) {
+  return new EmbedBuilder()
+    .setColor(0xf59e0b)
+    .setTitle("📋 בקשת דמות חדשה לאישור")
+    .addFields(
+      { name: "דמות", value: req.name, inline: true },
+      { name: "עולם", value: req.world, inline: true },
+      { name: "משתמש", value: `<@${discordId}>`, inline: true },
+      { name: "קוד אימות", value: `\`${req.code}\``, inline: true },
+    )
+    .setTimestamp();
+}
+
+function buildAdminButtons(reqId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`approve_${reqId}`).setLabel("✅ אשר").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`reject_${reqId}`).setLabel("❌ דחה").setStyle(ButtonStyle.Danger),
+  );
 }
 
 async function sendVerificationDM(client, req) {
@@ -91,6 +112,22 @@ function watchPendingCharacters(client) {
   console.log("✅ Watching PendingCharacter collection");
 }
 
+async function resolveAdminTargets(world) {
+  const guildConfigs = await getGuildsForAdminWorld(world);
+  if (guildConfigs.length) {
+    return guildConfigs.map((cfg) => ({
+      guildId: cfg.guildId,
+      channelId: cfg.adminChannelId,
+    }));
+  }
+
+  if (ADMIN_CHANNEL_ID) {
+    return [{ guildId: null, channelId: ADMIN_CHANNEL_ID }];
+  }
+
+  return [];
+}
+
 function watchDMScreenshots(client) {
   client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
@@ -124,39 +161,42 @@ function watchDMScreenshots(client) {
       const imgBuffer = await downloadBuffer(attachment.url);
       const ext = attachment.contentType === "image/png" ? "png" : attachment.contentType === "image/webp" ? "webp" : "jpg";
 
-      if (!ADMIN_CHANNEL_ID) {
-        await message.reply("❌ שגיאה: ערוץ האדמין לא מוגדר.");
+      const targets = await resolveAdminTargets(req.world);
+      if (!targets.length) {
+        await message.reply(`❌ אין ערוץ אדמין מוגדר לעולם **${req.world}**. פנה למנהל השרת.`);
         return;
       }
 
-      const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
+      const adminEmbed = buildAdminEmbed(req, discordId);
+      const row = buildAdminButtons(req._id.toString());
+      const adminMessages = [];
 
-      const adminEmbed = new EmbedBuilder()
-        .setColor(0xf59e0b)
-        .setTitle("📋 בקשת דמות חדשה לאישור")
-        .addFields(
-          { name: "דמות",      value: req.name,                  inline: true },
-          { name: "עולם",      value: req.world,                 inline: true },
-          { name: "משתמש",     value: `<@${discordId}>`,         inline: true },
-          { name: "קוד אימות", value: `\`${req.code}\``, inline: true },
-        )
-        .setTimestamp();
+      for (const target of targets) {
+        const adminChannel = await client.channels.fetch(target.channelId);
+        const adminMsg = await adminChannel.send({
+          embeds: [adminEmbed],
+          components: [row],
+          files: [{ attachment: imgBuffer, name: `screenshot.${ext}` }],
+        });
+        adminMessages.push({
+          guildId: target.guildId,
+          channelId: target.channelId,
+          messageId: adminMsg.id,
+        });
+      }
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`approve_${req._id}`).setLabel("✅ אשר").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`reject_${req._id}`).setLabel("❌ דחה").setStyle(ButtonStyle.Danger),
-      );
-
-      const adminMsg = await adminChannel.send({
-        embeds: [adminEmbed],
-        components: [row],
-        files: [{ attachment: imgBuffer, name: `screenshot.${ext}` }],
-      });
+      const firstAttachmentUrl = adminMessages.length
+        ? (await client.channels.fetch(adminMessages[0].channelId)
+          .then((ch) => ch.messages.fetch(adminMessages[0].messageId))
+          .then((m) => m.attachments.first()?.url || null)
+          .catch(() => null))
+        : null;
 
       await PendingCharacter.findByIdAndUpdate(req._id, {
-        prtsc: adminMsg.attachments.first()?.url || null,
+        prtsc: firstAttachmentUrl,
         screenshotUploadedAt: new Date(),
-        adminMessageId: adminMsg.id,
+        adminMessages,
+        adminMessageId: adminMessages[0]?.messageId || null,
       });
 
       await message.reply(`✅ התמונה התקבלה! הבקשה לדמות **${req.name}** ממתינה לאישור מנהל.`);
@@ -173,20 +213,57 @@ function requestStillOpen(msg, idStr) {
   );
 }
 
-async function findAdminRequestMessage(client, doc) {
-  if (!ADMIN_CHANNEL_ID) return null;
-  const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
+async function findAdminRequestMessages(client, doc) {
   const idStr = doc._id.toString();
+  const messages = [];
 
-  if (doc.adminMessageId) {
+  if (doc.adminMessages?.length) {
+    for (const entry of doc.adminMessages) {
+      try {
+        const channel = await client.channels.fetch(entry.channelId);
+        const msg = await channel.messages.fetch(entry.messageId);
+        if (msg) messages.push(msg);
+      } catch {}
+    }
+    if (messages.length) return messages;
+  }
+
+  if (doc.adminMessageId && ADMIN_CHANNEL_ID) {
     try {
+      const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
       const msg = await adminChannel.messages.fetch(doc.adminMessageId);
-      if (msg) return msg;
+      if (msg) return [msg];
     } catch {}
   }
 
-  const messages = await adminChannel.messages.fetch({ limit: 50 });
-  return messages.find(m => requestStillOpen(m, idStr)) || null;
+  if (ADMIN_CHANNEL_ID) {
+    try {
+      const adminChannel = await client.channels.fetch(ADMIN_CHANNEL_ID);
+      const recent = await adminChannel.messages.fetch({ limit: 50 });
+      const legacy = recent.find((m) => requestStillOpen(m, idStr));
+      if (legacy) return [legacy];
+    } catch {}
+  }
+
+  return messages;
+}
+
+async function buildHandledEmbed(baseEmbed, isApprove, handlerMention) {
+  return EmbedBuilder.from(baseEmbed)
+    .setColor(isApprove ? 0x22c55e : 0xef4444)
+    .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
+    .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: handlerMention });
+}
+
+async function updateAllAdminRequestMessages(client, doc, isApprove, handlerMention) {
+  const messages = await findAdminRequestMessages(client, doc);
+  const idStr = doc._id.toString();
+
+  for (const msg of messages) {
+    if (!requestStillOpen(msg, idStr) || !msg.embeds?.[0]) continue;
+    const updatedEmbed = await buildHandledEmbed(msg.embeds[0], isApprove, handlerMention);
+    await msg.edit({ embeds: [updatedEmbed], components: [] });
+  }
 }
 
 async function syncAdminRequestMessage(client, doc) {
@@ -205,23 +282,14 @@ async function syncAdminRequestMessage(client, doc) {
   if (!claimed) return false;
 
   try {
-    const msg = await findAdminRequestMessage(client, doc);
-    const idStr = doc._id.toString();
-
-    if (msg && requestStillOpen(msg, idStr) && msg.embeds?.[0]) {
-      const who = await resolveHandlerMention(doc.handledBy, User);
-      const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
-        .setColor(isApprove ? 0x22c55e : 0xef4444)
-        .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
-        .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: who });
-      await msg.edit({ embeds: [updatedEmbed], components: [] });
-    }
+    const who = await resolveHandlerMention(doc.handledBy, User);
+    await updateAllAdminRequestMessages(client, doc, isApprove, who);
 
     if (isReject) {
       await PendingCharacter.findByIdAndDelete(doc._id);
     }
 
-    console.log("✅ הודעת אדמין עודכנה עבור", doc._id.toString());
+    console.log("✅ הודעות אדמין עודכנו עבור", doc._id.toString());
     return true;
   } catch (err) {
     await PendingCharacter.findByIdAndUpdate(doc._id, { $unset: { discordHandled: 1 } }).catch(() => {});
@@ -275,4 +343,9 @@ function watchHandledRequests(client) {
   startStream();
 }
 
-module.exports = { watchPendingCharacters, watchDMScreenshots, watchHandledRequests };
+module.exports = {
+  watchPendingCharacters,
+  watchDMScreenshots,
+  watchHandledRequests,
+  updateAllAdminRequestMessages,
+};

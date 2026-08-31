@@ -8,7 +8,8 @@ const { syncCharacterStats }       = require("./syncStats");
 const { updateLivesMessage }       = require("./lives");
 const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = require("./verification");
 const { handleInteractions }       = require("./interactions");
-const { updateMemberCountChannel, setupWelcome } = require("./welcome");
+const { handleSetupCommand }       = require("./setup");
+const { migrateLegacyEnvConfig }   = require("./lib/guildConfig");
 
 const client = new Client({
   intents: [
@@ -94,11 +95,13 @@ function scheduleDailyLeaderboard(client) {
 }
 
 client.once("ready", async () => {
-  console.log(`✅ בוט מחובר כ: ${client.user.tag}`);
+  console.log(`✅ בוט מחובר כ: ${client.user.tag} (rank UI v2)`);
 
   await connectDB();
 
   console.log("🟢 MongoDB ready");
+
+  await migrateLegacyEnvConfig(client);
 
   scheduleDailyLeaderboard(client);
 
@@ -111,16 +114,15 @@ client.once("ready", async () => {
 
   scheduleDailyStatusRefresh();
 
-  await updateMemberCountChannel(client);
-  setInterval(() => updateMemberCountChannel(client), 60 * 60 * 1000);
-
-  // Start change streams immediately after the connection resolves.
   watchPendingCharacters(client);
   watchDMScreenshots(client);
   watchHandledRequests(client);
 
   handleInteractions(client);
-  setupWelcome(client);
+
+  client.on("interactionCreate", async (interaction) => {
+    await handleSetupCommand(interaction, client);
+  });
 });
 
 client.login(DISCORD_TOKEN);

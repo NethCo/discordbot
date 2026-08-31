@@ -3,16 +3,24 @@ const PendingCharacter = require("./models/PendingCharacter");
 const Character = require("./models/Character");
 const User = require("./models/User");
 const { WEBSITE_RANKINGS_URL } = require("./config");
-const { getUserCharacters, getCharacterRank } = require("./leaderboard");
-const { isDiscordSnowflake, resolveDiscordUserIdFromRequest } = require("./utils/discordIdentity");
+const {
+  getUserCharacters,
+  getCharacterRank,
+  getCharacterWorldRank,
+  attachProfileUrls,
+  resolveCharacterAvatar,
+  formatLevelExpPercent,
+  buildProfileUrl,
+} = require("./leaderboard");
+const { updateAllAdminRequestMessages } = require("./verification");
+const { ALLOWED_WORLDS, fetchOverall, fetchFame } = require("./lib/nexonCharacter");
 
 const rankSelectionCache = new Map();
-const { ALLOWED_WORLDS, fetchOverall, fetchFame } = require("./lib/nexonCharacter");
 
 function saveUserRankCache(discordId, characters) {
   rankSelectionCache.set(discordId, {
     expiresAt: Date.now() + 2 * 60 * 1000,
-    byId: new Map(characters.map(c => [c.id, c])),
+    byId: new Map(characters.map((c) => [c.id, c])),
   });
 }
 
@@ -26,6 +34,56 @@ function getUserRankCache(discordId, charId) {
   return cache.byId.get(charId) || null;
 }
 
+function buildPersonalRankEmbed({ charData, globalRank, worldRank, profileUrl, avatarUrl }) {
+  const pct = formatLevelExpPercent(charData.lvl, charData.exp);
+  const name = String(charData.name || "Character");
+  const job = String(charData.job || "—").trim() || "—";
+  const world = String(charData.world || "—").trim() || "—";
+
+  const embed = new EmbedBuilder()
+    .setColor(0xff6600)
+    .setAuthor({
+      name,
+      url: profileUrl || undefined,
+    })
+    .setDescription(
+      `Lv **${charData.lvl}** (${pct})\n` +
+      `${job} in **${world}**\n\n` +
+      `Overall · **#${globalRank}**\n` +
+      `${world} · **#${worldRank ?? "—"}**`,
+    )
+    .setFooter({ text: "MSIsrael.gg" });
+
+  if (avatarUrl) {
+    embed.setImage(avatarUrl);
+  }
+
+  if (profileUrl) {
+    embed.setURL(profileUrl);
+  }
+
+  return embed;
+}
+
+async function replyWithPersonalRank(interaction, charData, discordUserId) {
+  const [globalRank, worldRank, avatarUrl] = await Promise.all([
+    getCharacterRank(charData),
+    getCharacterWorldRank(charData),
+    resolveCharacterAvatar(charData),
+  ]);
+  const profileUrl = charData.profileUrl || buildProfileUrl(discordUserId);
+  const embed = buildPersonalRankEmbed({
+    charData,
+    globalRank,
+    worldRank,
+    profileUrl,
+    avatarUrl,
+  });
+
+  await interaction.editReply({ content: null, embeds: [embed], components: [] });
+  setTimeout(async () => { try { await interaction.deleteReply(); } catch {} }, 60_000);
+}
+
 async function handleInteractions(client) {
   client.on("interactionCreate", async (interaction) => {
     if (!interaction.isButton()) return;
@@ -35,26 +93,40 @@ async function handleInteractions(client) {
       try {
         const result = await getUserCharacters(interaction.user.id);
         if (result.status === "no_account") {
-          return interaction.editReply({ content: `❌ לא מצאתי חשבון מקושר. היכנס לאתר: **${WEBSITE_RANKINGS_URL}**` });
+          return interaction.editReply({
+            content: `No linked account found. Sign in at **${WEBSITE_RANKINGS_URL}**`,
+          });
         }
         if (result.status === "no_characters") {
-          return interaction.editReply({ content: "❌ נמצא חשבון מקושר, אך אין בו דמויות עדיין." });
+          return interaction.editReply({ content: "Your account has no registered characters yet." });
         }
-        const characters = result.characters;
+
+        const [characters] = await Promise.all([
+          attachProfileUrls(result.characters),
+        ]);
         saveUserRankCache(interaction.user.id, characters);
+
+        if (characters.length === 1) {
+          await replyWithPersonalRank(interaction, characters[0], interaction.user.id);
+          return;
+        }
+
         const row = new ActionRowBuilder().addComponents(
-          characters.map(c =>
+          characters.map((c) =>
             new ButtonBuilder()
               .setCustomId(`rank_char_${c.id}`)
               .setLabel(`${c.name} (${c.lvl})`)
-              .setStyle(ButtonStyle.Secondary)
-          )
+              .setStyle(ButtonStyle.Secondary),
+          ),
         );
-        await interaction.editReply({ content: "בחר דמות להצגת הדירוג:", components: [row] });
+        await interaction.editReply({
+          content: "Select a character to view your rank:",
+          components: [row],
+        });
         setTimeout(async () => { try { await interaction.deleteReply(); } catch {} }, 60_000);
       } catch (err) {
-        console.error("שגיאה ב-my_rank:", err);
-        await interaction.editReply({ content: "❌ אירעה שגיאה, נסה שוב מאוחר יותר." });
+        console.error("my_rank error:", err);
+        await interaction.editReply({ content: "Something went wrong. Please try again later." });
       }
       return;
     }
@@ -68,31 +140,21 @@ async function handleInteractions(client) {
         if (!charData) {
           const result = await getUserCharacters(interaction.user.id);
           if (result.status !== "ok") {
-            return interaction.editReply({ content: "❌ לא מצאתי דמויות מקושרות לחשבון שלך." });
+            return interaction.editReply({ content: "No linked characters found on your account." });
           }
-          saveUserRankCache(interaction.user.id, result.characters);
-          charData = result.characters.find(c => c.id === charId) || null;
+          const [characters] = await Promise.all([
+            attachProfileUrls(result.characters),
+          ]);
+          saveUserRankCache(interaction.user.id, characters);
+          charData = characters.find((c) => c.id === charId) || null;
         }
 
-        if (!charData) return interaction.editReply({ content: "❌ דמות לא נמצאה." });
+        if (!charData) return interaction.editReply({ content: "Character not found." });
 
-        const rank = await getCharacterRank(charData);
-        const embed = new EmbedBuilder()
-          .setColor(0x00ccff)
-          .setTitle("📊 הדירוג שלך")
-          .setDescription(
-            `🍁 **${charData.name}**\n\n` +
-            `🏆 מיקום כללי: **#${rank}**\n` +
-            `⭐ רמה: **${charData.lvl}**\n` +
-            `עולם: **${charData.world || "—"}**\n` +
-            `עבודה: **${charData.job || "—"}**`
-          )
-          .setFooter({ text: "MapleStory Community Israel" });
-        await interaction.editReply({ embeds: [embed], components: [] });
-        setTimeout(async () => { try { await interaction.deleteReply(); } catch {} }, 60_000);
+        await replyWithPersonalRank(interaction, charData, interaction.user.id);
       } catch (err) {
-        console.error("שגיאה ב-rank_char:", err);
-        await interaction.editReply({ content: "❌ אירעה שגיאה, נסה שוב מאוחר יותר." });
+        console.error("rank_char error:", err);
+        await interaction.editReply({ content: "Something went wrong. Please try again later." });
       }
       return;
     }
@@ -152,21 +214,27 @@ async function handleInteractions(client) {
           }
         }
 
+        const handlerMention = `<@${interaction.user.id}>`;
+
         if (isApprove) {
           req.approved = true;
           req.handledBy = interaction.user.id;
           req.handledAt = new Date();
           req.discordHandled = true;
           await req.save();
+          await updateAllAdminRequestMessages(client, req, true, handlerMention);
         } else {
+          await updateAllAdminRequestMessages(client, req, false, handlerMention);
           await PendingCharacter.findByIdAndDelete(req._id);
         }
 
-        const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-          .setColor(isApprove ? 0x22c55e : 0xef4444)
-          .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
-          .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: `<@${interaction.user.id}>` });
-        await interaction.editReply({ embeds: [updatedEmbed], components: [] });
+        if (interaction.message?.embeds?.[0]) {
+          const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+            .setColor(isApprove ? 0x22c55e : 0xef4444)
+            .setTitle(isApprove ? "✅ בקשת דמות — אושרה" : "❌ בקשת דמות — נדחתה")
+            .addFields({ name: isApprove ? "אושר על ידי" : "נדחה על ידי", value: handlerMention });
+          await interaction.editReply({ embeds: [updatedEmbed], components: [] });
+        }
       } catch (err) {
         console.error("שגיאה ב-approve/reject:", err);
         await interaction.followUp({ content: "❌ לא הצלחתי לטפל בבקשה כרגע.", ephemeral: true }).catch(() => {});

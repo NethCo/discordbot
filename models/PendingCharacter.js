@@ -14,6 +14,11 @@ const pendingCharacterSchema = new mongoose.Schema({
   handledAt: Date,
   rejected: { type: Boolean, default: false },
   adminMessageId: String,
+  adminMessages: [{
+    guildId: String,
+    channelId: String,
+    messageId: String,
+  }],
   discordHandled: { type: Boolean, default: false },
 }, { timestamps: true, versionKey: false, collection: "pendingcharacters" });
 
