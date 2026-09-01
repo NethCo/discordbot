@@ -8,6 +8,7 @@ const { syncCharacterStats } = require("./syncStats");
 const { updateLivesMessage } = require("./lives");
 const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = require("./verification");
 const { handleInteractions } = require("./interactions");
+const { updateMemberCountChannel, setupWelcome } = require("./welcome");
 
 const client = new Client({
   intents: [
@@ -105,7 +106,11 @@ client.once("ready", async () => {
   await updateLivesMessage(client);
   setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
 
+  updateBotStatus();
   scheduleDailyStatusRefresh();
+
+  await updateMemberCountChannel(client);
+  setupWelcome(client);
 
   watchPendingCharacters(client);
   watchDMScreenshots(client);
