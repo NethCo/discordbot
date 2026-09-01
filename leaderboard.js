@@ -6,10 +6,8 @@ const { fetchMessageByIds } = require("./lib/findBotMessage");
 const {
   applyUpdatedLine,
   buildUpdatedLine,
-  parseUpdatedAtFromLine,
   readUpdatedLineFromEmbed,
 } = require("./lib/embedUpdatedLine");
-const { getGuildsWithLeaderboard, upsertGuildConfig } = require("./lib/guildConfig");
 const { formatLevelExpPercent, formatLevelWithExpPercent } = require("./lib/expToNextLevel");
 const { buildProfileUrl } = require("./lib/profileUrl");
 const { characterAvatarUrl, extractCharacterImg } = require("./lib/avatars");
@@ -181,16 +179,16 @@ async function readUpdatedLineFromLeaderboardMessage(client, channelId, messageI
 }
 
 /** My Rank uses the same Updated line as the leaderboard message. */
+let cachedLeaderboardMessageId = LEADERBOARD_MESSAGE_ID || null;
+
 async function ensureLeaderboardFooter(client) {
   if (cachedLeaderboardUpdatedLine) return cachedLeaderboardUpdatedLine;
 
-  const configs = await getGuildsWithLeaderboard();
-  for (const cfg of configs) {
-    if (!cfg.leaderboardChannelId || !cfg.leaderboardMessageId) continue;
+  if (LEADERBOARD_CHANNEL_ID) {
     const fromMessage = await readUpdatedLineFromLeaderboardMessage(
       client,
-      cfg.leaderboardChannelId,
-      cfg.leaderboardMessageId,
+      LEADERBOARD_CHANNEL_ID,
+      LEADERBOARD_MESSAGE_ID || cachedLeaderboardMessageId,
     );
     if (fromMessage) {
       setLeaderboardUpdatedLine(fromMessage);
@@ -201,34 +199,17 @@ async function ensureLeaderboardFooter(client) {
   return getLeaderboardUpdatedLine();
 }
 
-function leaderboardMessageIds(config) {
+function leaderboardMessageIds() {
   const ids = [];
-  if (
-    LEADERBOARD_MESSAGE_ID
-    && LEADERBOARD_CHANNEL_ID
-    && String(config.leaderboardChannelId) === String(LEADERBOARD_CHANNEL_ID)
-  ) {
-    ids.push(LEADERBOARD_MESSAGE_ID);
+  if (LEADERBOARD_MESSAGE_ID) ids.push(LEADERBOARD_MESSAGE_ID);
+  if (cachedLeaderboardMessageId && cachedLeaderboardMessageId !== LEADERBOARD_MESSAGE_ID) {
+    ids.push(cachedLeaderboardMessageId);
   }
-  if (config.leaderboardMessageId) ids.push(config.leaderboardMessageId);
   return ids;
 }
 
-async function resolveLeaderboardMessage(channel, client, config) {
-  return fetchMessageByIds(channel, client, leaderboardMessageIds(config));
-}
-
-/** Startup / deploy — edit existing message or post a new one if no saved ID works. */
-async function refreshLeaderboardLayoutOnStartup(client) {
-  const configs = await getGuildsWithLeaderboard();
-
-  for (const config of configs) {
-    try {
-      await updateGuildLeaderboard(client, config, { refreshTimestamp: false });
-    } catch (err) {
-      console.warn(`⚠️  Leaderboard startup (${config.guildId}): ${err.message}`);
-    }
-  }
+async function resolveLeaderboardMessage(channel, client) {
+  return fetchMessageByIds(channel, client, leaderboardMessageIds());
 }
 
 function worldTag(world) {
@@ -347,61 +328,40 @@ function buildLeaderboardButtons() {
   );
 }
 
-async function updateGuildLeaderboard(client, config, { refreshTimestamp = true } = {}) {
-  const channel = await client.channels.fetch(config.leaderboardChannelId);
-  if (!channel) {
-    console.error(`❌ Leaderboard channel not found (guild ${config.guildId})`);
-    return false;
+async function updateLeaderboard(client) {
+  if (!LEADERBOARD_CHANNEL_ID) {
+    console.warn("⚠️ LEADERBOARD_CHANNEL_ID not configured");
+    return;
   }
 
-  const top10 = await getTop10();
-  const row = buildLeaderboardButtons();
-  const msg = await resolveLeaderboardMessage(channel, client, config);
-
-  if (msg) {
-    try {
-      let updatedAt = Date.now();
-      if (!refreshTimestamp) {
-        const existingLine = readUpdatedLineFromEmbed(msg.embeds[0])
-          || cachedLeaderboardUpdatedLine;
-        updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
-      }
-      setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
-
-      const embed = buildLeaderboardEmbed(top10, client, updatedAt);
-      await msg.edit({ embeds: [embed], components: [row] });
-      console.log(`✅ Leaderboard updated (${config.guildId})${refreshTimestamp ? "" : " — layout only, timestamp kept"}`);
-      return true;
-    } catch {}
-  }
-
-  const updatedAt = Date.now();
-  setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
-  const embed = buildLeaderboardEmbed(top10, client, updatedAt);
-
-  const newMsg = await channel.send({ embeds: [embed], components: [row] });
-  await upsertGuildConfig(config.guildId, { leaderboardMessageId: newMsg.id });
-  console.log(`✅ Leaderboard posted (${config.guildId}): message ${newMsg.id}`);
-  return true;
-}
-
-async function updateLeaderboard(client, options = {}) {
   try {
-    const configs = await getGuildsWithLeaderboard();
-    if (!configs.length) {
-      console.warn("⚠️ No guilds with a leaderboard channel configured");
+    const channel = await client.channels.fetch(LEADERBOARD_CHANNEL_ID);
+    if (!channel) {
+      console.error("❌ Leaderboard channel not found");
       return;
     }
 
-    let ok = 0;
-    for (const config of configs) {
+    const top10 = await getTop10();
+    const row = buildLeaderboardButtons();
+    const msg = await resolveLeaderboardMessage(channel, client);
+    const updatedAt = Date.now();
+    setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
+    const embed = buildLeaderboardEmbed(top10, client, updatedAt);
+
+    if (msg) {
       try {
-        if (await updateGuildLeaderboard(client, config, options)) ok += 1;
+        await msg.edit({ embeds: [embed], components: [row] });
+        cachedLeaderboardMessageId = msg.id;
+        console.log("✅ Leaderboard updated");
+        return;
       } catch (err) {
-        console.error(`❌ Leaderboard error (${config.guildId}):`, err.message);
+        console.warn(`⚠️ Failed to edit leaderboard message: ${err.message}`);
       }
     }
-    console.log(`📊 Updated ${ok}/${configs.length} leaderboard channels`);
+
+    const newMsg = await channel.send({ embeds: [embed], components: [row] });
+    cachedLeaderboardMessageId = newMsg.id;
+    console.log(`✅ Leaderboard posted: message ${newMsg.id} (set LEADERBOARD_MESSAGE_ID=${newMsg.id} to persist)`);
   } catch (err) {
     console.error("❌ Leaderboard update failed:", err);
   }
@@ -409,7 +369,6 @@ async function updateLeaderboard(client, options = {}) {
 
 module.exports = {
   updateLeaderboard,
-  refreshLeaderboardLayoutOnStartup,
   getCharacterRank,
   getCharacterWorldRank,
   getCharactersAroundRank,

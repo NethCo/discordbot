@@ -7,13 +7,10 @@ const {
   LIVES_CHANNEL_ID,
   LIVES_MESSAGE_ID,
 } = require("./config");
-const { getGuildsWithLives, upsertGuildConfig, worldsLabel } = require("./lib/guildConfig");
-const {
-  applyUpdatedLine,
-  parseUpdatedAtFromLine,
-  readUpdatedLineFromEmbed,
-} = require("./lib/embedUpdatedLine");
+const { applyUpdatedLine } = require("./lib/embedUpdatedLine");
 const { fetchMessageByIds } = require("./lib/findBotMessage");
+
+let cachedLivesMessageId = LIVES_MESSAGE_ID || null;
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -39,6 +36,11 @@ const PLATFORM_LABELS = {
   kick: "Kick",
 };
 
+const LIVES_TITLE = "Live Streams";
+
+let kickToken = null;
+let kickTokenExpiry = 0;
+
 function isWorldStreamer(uid) {
   return uid === WORLD_STREAMER_UID;
 }
@@ -50,11 +52,6 @@ function originIcon(uid) {
 function platformBadge(platform) {
   const label = PLATFORM_LABELS[platform] || platform;
   return `\`[${label}]\``;
-}
-
-function filterStreamersByWorlds(streamers, worlds) {
-  if (!worlds?.length) return streamers;
-  return streamers.filter((s) => s.world && worlds.includes(s.world));
 }
 
 function streamerViewers(streamer, liveData) {
@@ -141,11 +138,6 @@ function fitRowsToEmbed(rows) {
   }
   return kept;
 }
-
-const LIVES_TITLE = "Live Streams";
-
-let kickToken = null;
-let kickTokenExpiry = 0;
 
 function liveKey(platform, id) {
   return `${platform}:${id}`;
@@ -298,163 +290,118 @@ function applyLivesUpdatedLine(embed, updatedAt = Date.now()) {
   return applyUpdatedLine(embed, updatedAt, livesUpdatedIntervalText());
 }
 
-function livesMessageIds(config) {
+function livesMessageIds() {
   const ids = [];
-  if (
-    LIVES_MESSAGE_ID
-    && LIVES_CHANNEL_ID
-    && String(config.livesChannelId) === String(LIVES_CHANNEL_ID)
-  ) {
-    ids.push(LIVES_MESSAGE_ID);
+  if (LIVES_MESSAGE_ID) ids.push(LIVES_MESSAGE_ID);
+  if (cachedLivesMessageId && cachedLivesMessageId !== LIVES_MESSAGE_ID) {
+    ids.push(cachedLivesMessageId);
   }
-  if (config.livesMessageId) ids.push(config.livesMessageId);
   return ids;
 }
 
-async function resolveLivesMessage(channel, client, config) {
-  return fetchMessageByIds(channel, client, livesMessageIds(config));
-}
-
-/** Startup / deploy — edit layout if ID works, otherwise post a fresh lives message. */
-async function refreshLivesLayoutOnStartup(client) {
-  const configs = await getGuildsWithLives();
-  if (!configs.length) return;
-
-  const streamers = await getApprovedStreamers();
-  const { supported, liveData } = await buildLiveData(streamers);
-
-  for (const config of configs) {
-    try {
-      const channel = await client.channels.fetch(config.livesChannelId);
-      if (!channel) continue;
-
-      const msg = await resolveLivesMessage(channel, client, config);
-      if (msg?.embeds[0]) {
-        const existingLine = readUpdatedLineFromEmbed(msg.embeds[0]);
-        const updatedAt = parseUpdatedAtFromLine(existingLine) || Date.now();
-
-        let embed = EmbedBuilder.from(msg.embeds[0])
-          .setTitle(LIVES_TITLE)
-          .setColor(LIVE_EMBED_COLOR);
-        embed = applyLivesUpdatedLine(embed, updatedAt);
-
-        await msg.edit({ embeds: [embed], components: [] });
-        console.log(`✅ Lives layout refreshed on startup (${config.guildId}, no API)`);
-      } else {
-        await updateGuildLives(client, config, supported, liveData);
-        console.log(`✅ Lives posted on startup (${config.guildId}) — no saved message ID`);
-      }
-    } catch (err) {
-      console.warn(`⚠️  Lives startup (${config.guildId}): ${err.message}`);
-    }
-  }
-}
-
-async function updateGuildLives(client, config, supported, liveData) {
-  const channel = await client.channels.fetch(config.livesChannelId);
-  if (!channel) {
-    console.error(`❌ ערוץ לייבים לא נמצא (guild ${config.guildId})`);
-    return;
-  }
-
-  const scopedStreamers = filterStreamersByWorlds(supported, config.worlds);
-  const liveStreamers = sortLiveStreamers(
-    scopedStreamers.filter((s) => !!liveData[liveKey(s.platform, String(s._id))]),
-    liveData,
-  );
-
-  console.log(
-    `📺 לייבים (${config.guildId}, ${worldsLabel(config)}): ${scopedStreamers.length} ברשימה, ${liveStreamers.length} פעילים`,
-  );
-
-  const savedMsg = await resolveLivesMessage(channel, client, config);
-  const updatedAt = Date.now();
-
-  if (liveStreamers.length === 0) {
-    const noLiveEmbed = applyLivesUpdatedLine(
-      new EmbedBuilder()
-        .setColor(LIVE_EMBED_COLOR)
-        .setTitle(LIVES_TITLE)
-        .setDescription("No live streams right now."),
-      updatedAt,
-    );
-
-    if (savedMsg) {
-      try {
-        await savedMsg.edit({ embeds: [noLiveEmbed], components: [] });
-        return;
-      } catch {}
-    }
-    const msg = await channel.send({ embeds: [noLiveEmbed] });
-    await upsertGuildConfig(config.guildId, { livesMessageId: msg.id });
-    return;
-  }
-
-  const rows = liveStreamers.map((streamer) => {
-    const name = streamer.name;
-    const key = liveKey(streamer.platform, String(streamer._id));
-    const stream = liveData[key] || {};
-    const titleText = stream.title || "";
-    const viewers = (stream.viewers || 0).toLocaleString();
-    const login = stream.login || streamer.name;
-    const baseUrl = PLATFORM_URLS[streamer.platform] || PLATFORM_URLS.twitch;
-
-    return buildTableRow(
-      formatStreamerLine(streamer, name, `${baseUrl}${login}`),
-      titleText,
-      `${LRM}👁 ${viewers}`,
-    );
-  });
-
-  const shownRows = fitRowsToEmbed(rows);
-  const streamerColumn = joinColumn(shownRows, "streamer");
-  const statusColumn = joinColumn(shownRows, "status");
-  const viewersColumn = joinColumn(shownRows, "viewers");
-
-  const embed = applyLivesUpdatedLine(
-    new EmbedBuilder()
-      .setColor(LIVE_EMBED_COLOR)
-      .setTitle(LIVES_TITLE)
-      .addFields(
-        { name: "Streamer", value: streamerColumn || "—", inline: true },
-        { name: "Status", value: statusColumn || "—", inline: true },
-        { name: "Viewers", value: viewersColumn || "—", inline: true },
-      ),
-    updatedAt,
-  );
-
-  if (savedMsg) {
-    try {
-      await savedMsg.edit({ embeds: [embed], components: [] });
-      return;
-    } catch {}
-  }
-
-  const msg = await channel.send({ embeds: [embed] });
-  await upsertGuildConfig(config.guildId, { livesMessageId: msg.id });
+async function resolveLivesMessage(channel, client) {
+  return fetchMessageByIds(channel, client, livesMessageIds());
 }
 
 async function updateLivesMessage(client) {
+  if (!LIVES_CHANNEL_ID) {
+    console.warn("⚠️ LIVES_CHANNEL_ID not configured");
+    return;
+  }
+
   try {
-    const configs = await getGuildsWithLives();
-    if (!configs.length) {
-      console.warn("⚠️ אין שרתים עם ערוץ לייבים מוגדר");
+    const channel = await client.channels.fetch(LIVES_CHANNEL_ID);
+    if (!channel) {
+      console.error("❌ Lives channel not found");
       return;
     }
 
     const streamers = await getApprovedStreamers();
     const { supported, liveData } = await buildLiveData(streamers);
+    const liveStreamers = sortLiveStreamers(
+      supported.filter((s) => !!liveData[liveKey(s.platform, String(s._id))]),
+      liveData,
+    );
 
-    for (const config of configs) {
+    console.log(`📺 Lives: ${supported.length} streamers, ${liveStreamers.length} live`);
+
+    const savedMsg = await resolveLivesMessage(channel, client);
+    const updatedAt = Date.now();
+
+    if (liveStreamers.length === 0) {
+      const noLiveEmbed = applyLivesUpdatedLine(
+        new EmbedBuilder()
+          .setColor(LIVE_EMBED_COLOR)
+          .setTitle(LIVES_TITLE)
+          .setDescription("No live streams right now."),
+        updatedAt,
+      );
+
+      if (savedMsg) {
+        try {
+          await savedMsg.edit({ embeds: [noLiveEmbed], components: [] });
+          cachedLivesMessageId = savedMsg.id;
+          return;
+        } catch (err) {
+          console.warn(`⚠️ Failed to edit lives message: ${err.message}`);
+        }
+      }
+
+      const msg = await channel.send({ embeds: [noLiveEmbed] });
+      cachedLivesMessageId = msg.id;
+      console.log(`✅ Lives posted: message ${msg.id} (set LIVES_MESSAGE_ID=${msg.id} to persist)`);
+      return;
+    }
+
+    const rows = liveStreamers.map((streamer) => {
+      const name = streamer.name;
+      const key = liveKey(streamer.platform, String(streamer._id));
+      const stream = liveData[key] || {};
+      const titleText = stream.title || "";
+      const viewers = (stream.viewers || 0).toLocaleString();
+      const login = stream.login || streamer.name;
+      const baseUrl = PLATFORM_URLS[streamer.platform] || PLATFORM_URLS.twitch;
+
+      return buildTableRow(
+        formatStreamerLine(streamer, name, `${baseUrl}${login}`),
+        titleText,
+        `${LRM}👁 ${viewers}`,
+      );
+    });
+
+    const shownRows = fitRowsToEmbed(rows);
+    const streamerColumn = joinColumn(shownRows, "streamer");
+    const statusColumn = joinColumn(shownRows, "status");
+    const viewersColumn = joinColumn(shownRows, "viewers");
+
+    const embed = applyLivesUpdatedLine(
+      new EmbedBuilder()
+        .setColor(LIVE_EMBED_COLOR)
+        .setTitle(LIVES_TITLE)
+        .addFields(
+          { name: "Streamer", value: streamerColumn || "—", inline: true },
+          { name: "Status", value: statusColumn || "—", inline: true },
+          { name: "Viewers", value: viewersColumn || "—", inline: true },
+        ),
+      updatedAt,
+    );
+
+    if (savedMsg) {
       try {
-        await updateGuildLives(client, config, supported, liveData);
+        await savedMsg.edit({ embeds: [embed], components: [] });
+        cachedLivesMessageId = savedMsg.id;
+        return;
       } catch (err) {
-        console.error(`❌ שגיאה בלייבים (${config.guildId}):`, err.stack || err.message);
+        console.warn(`⚠️ Failed to edit lives message: ${err.message}`);
       }
     }
+
+    const msg = await channel.send({ embeds: [embed] });
+    cachedLivesMessageId = msg.id;
+    console.log(`✅ Lives posted: message ${msg.id} (set LIVES_MESSAGE_ID=${msg.id} to persist)`);
   } catch (err) {
-    console.error("❌ שגיאה בעדכון לייבים:", err.stack || err.message);
+    console.error("❌ Lives update failed:", err.stack || err.message);
   }
 }
 
-module.exports = { updateLivesMessage, refreshLivesLayoutOnStartup };
+module.exports = { updateLivesMessage };

@@ -236,7 +236,6 @@ async function handleInteractions(client) {
         console.error("שגיאה ב-approve/reject:", err);
         await interaction.followUp({ content: "❌ לא הצלחתי לטפל בבקשה כרגע.", ephemeral: true }).catch(() => {});
       }
-      return;
     }
   });
 }

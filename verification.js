@@ -3,7 +3,6 @@ const https = require("https");
 const PendingCharacter = require("./models/PendingCharacter");
 const User = require("./models/User");
 const { ADMIN_CHANNEL_ID } = require("./config");
-const { getGuildsForAdminWorld } = require("./lib/guildConfig");
 const { isDiscordSnowflake, resolveDiscordUserIdFromRequest, resolveHandlerMention } = require("./utils/discordIdentity");
 
 function downloadBuffer(url) {
@@ -112,19 +111,10 @@ function watchPendingCharacters(client) {
   console.log("✅ Watching PendingCharacter collection");
 }
 
-async function resolveAdminTargets(world) {
-  const guildConfigs = await getGuildsForAdminWorld(world);
-  if (guildConfigs.length) {
-    return guildConfigs.map((cfg) => ({
-      guildId: cfg.guildId,
-      channelId: cfg.adminChannelId,
-    }));
-  }
-
+async function resolveAdminTargets() {
   if (ADMIN_CHANNEL_ID) {
     return [{ guildId: null, channelId: ADMIN_CHANNEL_ID }];
   }
-
   return [];
 }
 

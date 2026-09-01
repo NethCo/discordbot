@@ -18,7 +18,7 @@ async function updateMemberCountChannel(client) {
   try {
     if (!MEMBER_COUNT_CHANNEL_ID) return;
     const channel = await client.channels.fetch(MEMBER_COUNT_CHANNEL_ID);
-    if (!channel) return;
+    if (!channel?.guildId) return;
     await channel.guild.members.fetch();
     const count   = channel.guild.members.cache.filter(m => !m.user.bot).size;
     const newName = `👪 ${count} משתמשים`;

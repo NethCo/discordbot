@@ -1,7 +1,6 @@
 require("dotenv").config();
 const { REST, Routes } = require("discord.js");
 const { DISCORD_TOKEN } = require("./config");
-const { setupCommands } = require("./setup");
 
 function getClientIdFromToken(token) {
   const part = token.split(".")[0];
@@ -17,9 +16,9 @@ async function registerCommands() {
   const clientId = getClientIdFromToken(DISCORD_TOKEN);
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 
-  console.log(`🔄 רושם ${setupCommands.length} פקודות גלובליות...`);
-  await rest.put(Routes.applicationCommands(clientId), { body: setupCommands });
-  console.log("✅ הפקודות נרשמו. ייתכן עיכוב של עד שעה עד שיופיעו בכל השרתים.");
+  console.log("🔄 מנקה פקודות slash...");
+  await rest.put(Routes.applicationCommands(clientId), { body: [] });
+  console.log("✅ הפקודות נוקו.");
 }
 
 registerCommands().catch((err) => {
