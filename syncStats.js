@@ -34,22 +34,28 @@ async function syncCharacterStats() {
         fetchFame(char.name, world),
       ]);
 
-      if (!overall && !fameData) { missing++; continue; }
+      if (!overall) { missing++; continue; }
 
-      const updates = {};
-      if (overall) { updates.lvl = overall.lvl; updates.exp = overall.exp; updates.img = overall.img; updates.job = overall.job; }
-      if (fameData) { updates.fame = fameData.fame; }
+      const updates = {
+        lvl: overall.lvl,
+        exp: overall.exp,
+        img: overall.img,
+        job: overall.job,
+      };
+      if (fameData) updates.fame = fameData.fame;
 
       await Character.updateOne({ _id: char._id }, { $set: updates });
       updated++;
     }
 
-    await writeSyncStatus("ok", {
+    const status = missing === 0 ? "ok" : "error";
+    await writeSyncStatus(status, {
       totalCharacters: chars.length,
       updatedCharacters: updated,
       missingCharacters: missing,
       startedAt,
       finishedAt: new Date(),
+      ...(missing > 0 ? { rankingsLastSyncError: `${missing} characters not found on Nexon` } : {}),
     });
     console.log(`🔄 סינכרון סטטיסטיקות הושלם: עודכן ${updated}/${chars.length} (לא נמצאו: ${missing})`);
   } catch (err) {
