@@ -1,5 +1,7 @@
-require("dotenv").config();
-const { Client, GatewayIntentBits, Partials } = require("discord.js");
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
+}
+const { Client, GatewayIntentBits, Partials, Events } = require("discord.js");
 const { connectDB } = require("./db");
 const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
@@ -93,7 +95,7 @@ function scheduleDailyLeaderboard(client) {
   }, waitMs);
 }
 
-client.once("ready", async () => {
+client.once(Events.ClientReady, async () => {
   console.log(`✅ בוט מחובר כ: ${client.user.tag}`);
 
   await connectDB();
