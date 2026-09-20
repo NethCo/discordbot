@@ -1,6 +1,5 @@
 const { EmbedBuilder } = require("discord.js");
 const { WELCOME_CHANNEL_ID, MEMBER_COUNT_CHANNEL_ID, WEBSITE_URL } = require("./config");
-const { getCurrentHoliday } = require("./holidays");
 
 function formatFooterDate(date = new Date()) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -40,8 +39,6 @@ function setupWelcome(client) {
 
       await member.guild.members.fetch();
       const memberNumber = member.guild.members.cache.filter(m => !m.user.bot).size;
-      const holiday      = getCurrentHoliday();
-      const holidayLine  = holiday ? `\n${holiday.emoji} ומאחלים לך ${holiday.name} שמח!` : "";
       const botName = client.user?.username || "MSIsrael.gg";
       const botIcon = client.user?.displayAvatarURL({ dynamic: true });
       const footerDate = formatFooterDate();
@@ -51,7 +48,7 @@ function setupWelcome(client) {
         .setTitle("🍁 ברוך הבא לקהילת MapleStory Israel!")
         .setDescription(
           `שלום <@${member.id}>! 👋\n\n` +
-          `אתה החבר מספר **${memberNumber}** בשרת!${holidayLine}\n\n` +
+          `אתה החבר מספר **${memberNumber}** בשרת!\n\n` +
           `כדי להירשם לקהילה היכנס לאתר שלנו 🌐\n${WEBSITE_URL}`
         )
         .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
