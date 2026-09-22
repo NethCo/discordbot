@@ -30,6 +30,7 @@ function updateBotStatus() {
     ? holiday.status
     : (shabbat || "🍁 MapleStory Israel Community");
   client.user.setActivity(status, { type: 4 });
+  console.log(`📢 סטטוס בוט עודכן: ${status}`);
 }
 
 function msUntilNextIsraelMidnight() {
@@ -47,14 +48,18 @@ function msUntilNextIsraelMidnight() {
 
   const byType = Object.fromEntries(parts.map(p => [p.type, p.value]));
   const currentIsrael = new Date(`${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}Z`);
-  const nextIsraelMidnight = new Date(currentIsrael);
-  nextIsraelMidnight.setUTCDate(nextIsraelMidnight.getUTCDate() + 1);
-  nextIsraelMidnight.setUTCHours(0, 0, 5, 0);
-  return Math.max(1_000, nextIsraelMidnight.getTime() - currentIsrael.getTime());
+  const target = new Date(currentIsrael);
+  target.setUTCHours(0, 0, 0, 0);
+  if (target <= currentIsrael) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return Math.max(1_000, target.getTime() - currentIsrael.getTime());
 }
 
 function scheduleDailyStatusRefresh() {
   const waitMs = msUntilNextIsraelMidnight();
+  const targetTime = new Date(Date.now() + waitMs);
+  console.log(`⏰ סטטוס בוט יעודכן ב-${targetTime.toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" })}`);
   setTimeout(() => {
     updateBotStatus();
     scheduleDailyStatusRefresh();
@@ -111,7 +116,7 @@ client.once(Events.ClientReady, async () => {
   updateBotStatus();
   scheduleDailyStatusRefresh();
 
-  await updateMemberCountChannel(client);
+  await updateMemberCountChannel(client, { force: true });
   setupWelcome(client);
 
   watchPendingCharacters(client);

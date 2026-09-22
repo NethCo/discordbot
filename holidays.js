@@ -10,20 +10,39 @@ const HOLIDAYS = [
   { id: "independence", name: "יום העצמאות",   emoji: "🇮🇱", status: "🇮🇱 יום העצמאות שמח!",
     ranges: [{ s: [2027,5,9], e: [2027,5,10] }] },
   { id: "roshHashana",  name: "ראש השנה",       emoji: "🍎", status: "🍎 שנה טובה ומתוקה!",
-    ranges: [{ s: [2026,9,11], e: [2026,9,13] }, { s: [2027,10,1], e: [2027,10,3] }] },
+    ranges: [{ s: [2027,10,1], e: [2027,10,3] }] },
   { id: "yomKippur",    name: "יום כיפור",      emoji: "🤍", status: "🤍 גמר חתימה טובה!",
-    ranges: [{ s: [2026,9,20], e: [2026,9,21] }, { s: [2027,10,10], e: [2027,10,11] }] },
+    ranges: [{ s: [2027,10,10], e: [2027,10,11] }] },
   { id: "sukkot",       name: "סוכות",          emoji: "🌿", status: "🌿 חג סוכות שמח!",
     ranges: [{ s: [2026,9,25], e: [2026,10,2] }, { s: [2027,10,15], e: [2027,10,22] }] },
 ];
 
+function israelYmd(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jerusalem",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const byType = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  return {
+    y: Number(byType.year),
+    m: Number(byType.month),
+    d: Number(byType.day),
+  };
+}
+
+function ymdKey({ y, m, d }) {
+  return y * 10_000 + m * 100 + d;
+}
+
 function getCurrentHoliday(date = new Date()) {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const today = ymdKey(israelYmd(date));
   for (const h of HOLIDAYS) {
     for (const r of h.ranges) {
-      const s = new Date(r.s[0], r.s[1] - 1, r.s[2]);
-      const e = new Date(r.e[0], r.e[1] - 1, r.e[2]);
-      if (d >= s && d <= e) return h;
+      const start = ymdKey({ y: r.s[0], m: r.s[1], d: r.s[2] });
+      const end = ymdKey({ y: r.e[0], m: r.e[1], d: r.e[2] });
+      if (today >= start && today <= end) return h;
     }
   }
   return null;
