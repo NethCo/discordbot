@@ -17,7 +17,7 @@ const PLATFORM_URLS = {
   kick: "https://kick.com/",
 };
 
-/** Site user id for manually added external streamers (no approval). */
+/** Site user id for manually added external streamers (not signed up on the site). */
 const WORLD_STREAMER_UID = "world";
 
 /** Embed left stripe — live red */
@@ -239,10 +239,10 @@ async function fetchPlatformStreams(platform, userIds) {
   }
 }
 
-async function getApprovedStreamers() {
+async function getStreamersForLives() {
   if (!SERVER_URL) return [];
   try {
-    const res = await fetch(SERVER_URL + "/api/streamers?approved=true");
+    const res = await fetch(SERVER_URL + "/api/streamers?lives=true");
     if (!res.ok) return [];
     const list = await res.json();
     return Array.isArray(list) ? list : [];
@@ -316,7 +316,7 @@ async function updateLivesMessage(client) {
       return;
     }
 
-    const streamers = await getApprovedStreamers();
+    const streamers = await getStreamersForLives();
     const { supported, liveData } = await buildLiveData(streamers);
     const liveStreamers = sortLiveStreamers(
       supported.filter((s) => !!liveData[liveKey(s.platform, String(s._id))]),
