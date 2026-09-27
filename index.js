@@ -11,6 +11,7 @@ const { updateLivesMessage } = require("./lives");
 const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = require("./verification");
 const { handleInteractions } = require("./interactions");
 const { updateMemberCountChannel, setupWelcome } = require("./welcome");
+const { migrateLegacyEnvConfig } = require("./lib/guildConfig");
 
 const client = new Client({
   intents: [
@@ -105,6 +106,8 @@ client.once(Events.ClientReady, async () => {
 
   await connectDB();
   console.log("🟢 MongoDB ready");
+
+  await migrateLegacyEnvConfig(client);
 
   scheduleDailyLeaderboard(client);
 

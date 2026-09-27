@@ -77,8 +77,8 @@ async function replyWithPersonalRank(interaction, charData) {
   setTimeout(async () => { try { await interaction.deleteReply(); } catch {} }, 60_000);
 }
 
-async function handleMyRankRequest(interaction, discordUserId) {
-  const result = await getUserCharacters(discordUserId);
+async function handleMyRankRequest(interaction, discordUserId, mode = "global") {
+  const result = await getUserCharacters(discordUserId, mode);
   if (result.status === "no_account") {
     await interaction.editReply({
       content: `No linked account found. Sign in at **${WEBSITE_RANKINGS_URL}**`,
@@ -101,7 +101,7 @@ async function handleMyRankRequest(interaction, discordUserId) {
   const row = new ActionRowBuilder().addComponents(
     characters.map((c) =>
       new ButtonBuilder()
-        .setCustomId(`rank_char_${c.id}`)
+        .setCustomId(`rank_char_${mode}_${c.id}`)
         .setLabel(`${c.name} (${c.lvl})`)
         .setStyle(ButtonStyle.Secondary),
     ),
@@ -117,10 +117,12 @@ async function handleInteractions(client) {
   client.on("interactionCreate", async (interaction) => {
     if (!interaction.isButton()) return;
 
-    if (interaction.customId === "my_rank") {
+    const myRankMatch = interaction.customId.match(/^my_rank(?:_(global|classic))?$/);
+    if (myRankMatch) {
       try { await interaction.deferReply({ flags: 64 }); } catch { return; }
       try {
-        await handleMyRankRequest(interaction, interaction.user.id);
+        const mode = myRankMatch[1] || "global";
+        await handleMyRankRequest(interaction, interaction.user.id, mode);
       } catch (err) {
         console.error("my_rank error:", err);
         await interaction.editReply({ content: "Something went wrong. Please try again later." });
@@ -128,14 +130,16 @@ async function handleInteractions(client) {
       return;
     }
 
-    if (interaction.customId.startsWith("rank_char_")) {
+    const rankCharMatch = interaction.customId.match(/^rank_char_(?:(global|classic)_)?(.+)$/);
+    if (rankCharMatch) {
       try { await interaction.deferReply({ flags: 64 }); } catch { return; }
       try {
-        const charId = interaction.customId.replace("rank_char_", "");
+        const mode = rankCharMatch[1] || "global";
+        const charId = rankCharMatch[2];
         let charData = getUserRankCache(interaction.user.id, charId);
 
         if (!charData) {
-          const result = await getUserCharacters(interaction.user.id);
+          const result = await getUserCharacters(interaction.user.id, mode);
           if (result.status !== "ok") {
             return interaction.editReply({ content: "No linked characters found on your account." });
           }
@@ -170,6 +174,7 @@ async function handleInteractions(client) {
         if (isApprove) {
           const safeCharName = String(req.name || "").trim();
           const safeWorld = String(req.world || "").trim();
+          const safeMode = req.mode === "classic" ? "classic" : "global";
           if (!safeCharName || safeCharName.length > 12) {
             throw new Error("invalid character name length");
           }
@@ -189,6 +194,7 @@ async function handleInteractions(client) {
           const character = new Character({
             name: safeCharName,
             world: safeWorld,
+            mode: safeMode,
             lvl: overall?.lvl ?? 0,
             exp: overall?.exp ?? 0,
             fame: fameData?.fame ?? 0,

@@ -1,7 +1,12 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const Character = require("./models/Character");
 const User = require("./models/User");
-const { WEBSITE_RANKINGS_URL, LEADERBOARD_CHANNEL_ID, LEADERBOARD_MESSAGE_ID } = require("./config");
+const {
+  WEBSITE_RANKINGS_URL,
+  WEBSITE_CLASSIC_RANKINGS_URL,
+  LEADERBOARD_CHANNEL_ID,
+  LEADERBOARD_MESSAGE_ID,
+} = require("./config");
 const { fetchMessageByIds } = require("./lib/findBotMessage");
 const {
   applyUpdatedLine,
@@ -11,13 +16,34 @@ const {
 const { formatLevelExpPercent, formatLevelWithExpPercent } = require("./lib/expToNextLevel");
 const { buildProfileUrl } = require("./lib/profileUrl");
 const { characterAvatarUrl, extractCharacterImg } = require("./lib/avatars");
+const {
+  LEADERBOARD_MODES,
+  getGuildsWithLeaderboard,
+  resolveLeaderboardTarget,
+  saveLeaderboardMessageId,
+} = require("./lib/guildConfig");
 
-const LEADERBOARD_TITLE = "Rankings Leaderboard";
+const LEADERBOARD_TITLES = {
+  global: "Global Rankings Leaderboard",
+  classic: "Classic Rankings Leaderboard",
+};
+
+const RANKINGS_URLS = {
+  global: WEBSITE_RANKINGS_URL,
+  classic: WEBSITE_CLASSIC_RANKINGS_URL || WEBSITE_RANKINGS_URL,
+};
+
 const LRM = "\u200E";
 const MEDALS = ["🥇", "🥈", "🥉"];
 
-async function getTop10() {
-  const docs = await Character.find()
+/** Characters without mode are treated as global. */
+function modeFilter(mode = "global") {
+  if (mode === "classic") return { mode: "classic" };
+  return { $or: [{ mode: "global" }, { mode: { $exists: false } }, { mode: null }] };
+}
+
+async function getTop10(mode = "global") {
+  const docs = await Character.find(modeFilter(mode))
     .sort({ lvl: -1, exp: -1 })
     .limit(10)
     .lean();
@@ -39,8 +65,12 @@ async function attachProfileUrls(characters) {
   }));
 }
 
-async function getCharacterRank(charData, world = null) {
-  const filter = world ? { world } : {};
+async function getCharacterRank(charData, world = null, mode = null) {
+  const resolvedMode = mode || charData.mode || "global";
+  const filter = {
+    ...modeFilter(resolvedMode),
+    ...(world ? { world } : {}),
+  };
   const lvl = charData.lvl || 0;
   const exp = charData.exp || 0;
   const count = await Character.countDocuments({
@@ -81,7 +111,7 @@ async function resolveCharacterAvatar(charData) {
   }
 }
 
-async function getUserCharacters(discordId) {
+async function getUserCharacters(discordId, mode = null) {
   const user = await User.findOne({ "auth.discord.id": discordId }).lean();
   if (!user) return { status: "no_account", characters: [], profileUrl: null };
 
@@ -90,7 +120,10 @@ async function getUserCharacters(discordId) {
     return { status: "no_characters", characters: [], profileUrl: buildProfileUrl(discordId) };
   }
 
-  const chars = await Character.find({ _id: { $in: characterIds } }).lean();
+  const query = { _id: { $in: characterIds } };
+  if (mode) Object.assign(query, modeFilter(mode));
+
+  const chars = await Character.find(query).lean();
   chars.sort((a, b) => b.lvl !== a.lvl ? b.lvl - a.lvl : (b.exp || 0) - (a.exp || 0));
   const result = chars.map((c) => ({ id: c._id.toString(), ...c }));
   return {
@@ -100,8 +133,12 @@ async function getUserCharacters(discordId) {
   };
 }
 
-async function getCharactersAroundRank(charData, world = null) {
-  const filter = world ? { world } : {};
+async function getCharactersAroundRank(charData, world = null, mode = null) {
+  const resolvedMode = mode || charData.mode || "global";
+  const filter = {
+    ...modeFilter(resolvedMode),
+    ...(world ? { world } : {}),
+  };
   const lvl = charData.lvl || 0;
   const exp = charData.exp || 0;
   const charId = String(charData.id || charData._id || "");
@@ -178,38 +215,33 @@ async function readUpdatedLineFromLeaderboardMessage(client, channelId, messageI
   }
 }
 
-/** My Rank uses the same Updated line as the leaderboard message. */
-let cachedLeaderboardMessageId = LEADERBOARD_MESSAGE_ID || null;
-
 async function ensureLeaderboardFooter(client) {
   if (cachedLeaderboardUpdatedLine) return cachedLeaderboardUpdatedLine;
 
-  if (LEADERBOARD_CHANNEL_ID) {
-    const fromMessage = await readUpdatedLineFromLeaderboardMessage(
-      client,
-      LEADERBOARD_CHANNEL_ID,
-      LEADERBOARD_MESSAGE_ID || cachedLeaderboardMessageId,
-    );
+  const guilds = await getGuildsWithLeaderboard("global");
+  for (const cfg of guilds) {
+    const { channelId, messageId } = resolveLeaderboardTarget(cfg, "global");
+    if (!channelId || !messageId) continue;
+    const fromMessage = await readUpdatedLineFromLeaderboardMessage(client, channelId, messageId);
     if (fromMessage) {
       setLeaderboardUpdatedLine(fromMessage);
       return fromMessage;
     }
   }
 
-  return getLeaderboardUpdatedLine();
-}
-
-function leaderboardMessageIds() {
-  const ids = [];
-  if (LEADERBOARD_MESSAGE_ID) ids.push(LEADERBOARD_MESSAGE_ID);
-  if (cachedLeaderboardMessageId && cachedLeaderboardMessageId !== LEADERBOARD_MESSAGE_ID) {
-    ids.push(cachedLeaderboardMessageId);
+  if (LEADERBOARD_CHANNEL_ID && LEADERBOARD_MESSAGE_ID) {
+    const fromEnv = await readUpdatedLineFromLeaderboardMessage(
+      client,
+      LEADERBOARD_CHANNEL_ID,
+      LEADERBOARD_MESSAGE_ID,
+    );
+    if (fromEnv) {
+      setLeaderboardUpdatedLine(fromEnv);
+      return fromEnv;
+    }
   }
-  return ids;
-}
 
-async function resolveLeaderboardMessage(channel, client) {
-  return fetchMessageByIds(channel, client, leaderboardMessageIds());
+  return getLeaderboardUpdatedLine();
 }
 
 function worldTag(world) {
@@ -309,10 +341,11 @@ function buildRankNeighborFields(neighbors) {
   return buildTableFields(neighbors, true);
 }
 
-function buildLeaderboardEmbed(top10, client, updatedAt = Date.now()) {
+function buildLeaderboardEmbed(top10, mode = "global", updatedAt = Date.now()) {
+  const title = LEADERBOARD_TITLES[mode] || LEADERBOARD_TITLES.global;
   let embed = new EmbedBuilder()
     .setColor(0xff6600)
-    .setTitle(LEADERBOARD_TITLE);
+    .setTitle(title);
 
   embed = top10.length
     ? embed.addFields(...buildTableFields(top10, false))
@@ -321,54 +354,128 @@ function buildLeaderboardEmbed(top10, client, updatedAt = Date.now()) {
   return applyUpdatedLine(embed, updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT);
 }
 
-function buildLeaderboardButtons() {
+function buildLeaderboardButtons(mode = "global") {
+  const url = RANKINGS_URLS[mode] || WEBSITE_RANKINGS_URL;
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("my_rank").setLabel("הדירוג שלי 📊").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setLabel("לרשימה המלאה באתר 🌐").setStyle(ButtonStyle.Link).setURL(WEBSITE_RANKINGS_URL),
+    new ButtonBuilder().setCustomId(`my_rank_${mode}`).setLabel("הדירוג שלי 📊").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setLabel("לרשימה המלאה באתר 🌐").setStyle(ButtonStyle.Link).setURL(url),
   );
 }
 
-async function updateLeaderboard(client) {
-  if (!LEADERBOARD_CHANNEL_ID) {
-    console.warn("⚠️ LEADERBOARD_CHANNEL_ID not configured");
+async function postOrEditLeaderboard(client, channelId, messageId, embed, row, guildId, mode) {
+  const channel = await client.channels.fetch(channelId);
+  if (!channel) {
+    console.error(`❌ Leaderboard channel not found: ${channelId}`);
+    return null;
+  }
+
+  const resolvedGuildId = guildId || channel.guildId || null;
+  const ids = [messageId].filter(Boolean);
+  const msg = await fetchMessageByIds(channel, client, ids);
+
+  if (msg) {
+    try {
+      await msg.edit({ embeds: [embed], components: [row] });
+      await saveLeaderboardMessageId(resolvedGuildId, mode, msg.id);
+      return msg.id;
+    } catch (err) {
+      console.warn(`⚠️ Failed to edit ${mode} leaderboard (${channelId}): ${err.message}`);
+    }
+  }
+
+  const newMsg = await channel.send({ embeds: [embed], components: [row] });
+  await saveLeaderboardMessageId(resolvedGuildId, mode, newMsg.id);
+  console.log(`✅ ${mode} leaderboard posted in ${channelId}: message ${newMsg.id}`);
+  return newMsg.id;
+}
+
+async function resolveLeaderboardTargets(mode) {
+  const guilds = await getGuildsWithLeaderboard(mode);
+  const targets = [];
+
+  for (const cfg of guilds) {
+    const { channelId, messageId } = resolveLeaderboardTarget(cfg, mode);
+    if (!channelId) continue;
+    targets.push({
+      guildId: cfg.guildId,
+      channelId,
+      messageId,
+    });
+  }
+
+  // Env fallback when no GuildConfig docs have a channel for this mode
+  if (!targets.length && mode === "global" && LEADERBOARD_CHANNEL_ID) {
+    targets.push({
+      guildId: null,
+      channelId: LEADERBOARD_CHANNEL_ID,
+      messageId: LEADERBOARD_MESSAGE_ID || null,
+    });
+  }
+
+  if (!targets.length && mode === "classic") {
+    const classicChannel = process.env.CLASSIC_LEADERBOARD_CHANNEL_ID;
+    if (classicChannel) {
+      targets.push({
+        guildId: null,
+        channelId: classicChannel,
+        messageId: process.env.CLASSIC_LEADERBOARD_MESSAGE_ID || null,
+      });
+    }
+  }
+
+  return targets;
+}
+
+async function updateLeaderboardForMode(client, mode = "global") {
+  const targets = await resolveLeaderboardTargets(mode);
+  if (!targets.length) {
+    if (mode === "global") {
+      console.warn("⚠️ No global leaderboard channels configured");
+    }
     return;
   }
 
   try {
-    const channel = await client.channels.fetch(LEADERBOARD_CHANNEL_ID);
-    if (!channel) {
-      console.error("❌ Leaderboard channel not found");
-      return;
-    }
-
-    const top10 = await getTop10();
-    const row = buildLeaderboardButtons();
-    const msg = await resolveLeaderboardMessage(channel, client);
+    const top10 = await getTop10(mode);
     const updatedAt = Date.now();
-    setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
-    const embed = buildLeaderboardEmbed(top10, client, updatedAt);
+    if (mode === "global") {
+      setLeaderboardUpdatedLine(buildUpdatedLine(updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT));
+    }
+    const embed = buildLeaderboardEmbed(top10, mode, updatedAt);
+    const row = buildLeaderboardButtons(mode);
 
-    if (msg) {
+    for (const target of targets) {
       try {
-        await msg.edit({ embeds: [embed], components: [row] });
-        cachedLeaderboardMessageId = msg.id;
-        console.log("✅ Leaderboard updated");
-        return;
+        await postOrEditLeaderboard(
+          client,
+          target.channelId,
+          target.messageId,
+          embed,
+          row,
+          target.guildId,
+          mode,
+        );
       } catch (err) {
-        console.warn(`⚠️ Failed to edit leaderboard message: ${err.message}`);
+        console.error(`❌ ${mode} leaderboard update failed for ${target.channelId}:`, err.message);
       }
     }
 
-    const newMsg = await channel.send({ embeds: [embed], components: [row] });
-    cachedLeaderboardMessageId = newMsg.id;
-    console.log(`✅ Leaderboard posted: message ${newMsg.id} (set LEADERBOARD_MESSAGE_ID=${newMsg.id} to persist)`);
+    console.log(`✅ ${mode} leaderboard updated on ${targets.length} message(s)`);
   } catch (err) {
-    console.error("❌ Leaderboard update failed:", err);
+    console.error(`❌ ${mode} leaderboard update failed:`, err);
+  }
+}
+
+/** Updates Global (and Classic when channels are configured) across all guilds. */
+async function updateLeaderboard(client) {
+  for (const mode of LEADERBOARD_MODES) {
+    await updateLeaderboardForMode(client, mode);
   }
 }
 
 module.exports = {
   updateLeaderboard,
+  updateLeaderboardForMode,
   getCharacterRank,
   getCharacterWorldRank,
   getCharactersAroundRank,
@@ -383,4 +490,6 @@ module.exports = {
   buildRankNeighborFields,
   buildProfileUrl,
   LEADERBOARD_UPDATE_INTERVAL_TEXT,
+  LEADERBOARD_TITLES,
+  modeFilter,
 };

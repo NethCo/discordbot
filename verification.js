@@ -4,6 +4,7 @@ const PendingCharacter = require("./models/PendingCharacter");
 const User = require("./models/User");
 const { ADMIN_CHANNEL_ID } = require("./config");
 const { isDiscordSnowflake, resolveDiscordUserIdFromRequest, resolveHandlerMention } = require("./utils/discordIdentity");
+const { getGuildsForAdminWorld, normalizeMode } = require("./lib/guildConfig");
 
 function downloadBuffer(url) {
   return new Promise((resolve, reject) => {
@@ -17,12 +18,14 @@ function downloadBuffer(url) {
 }
 
 function buildAdminEmbed(req, discordId) {
+  const mode = normalizeMode(req.mode);
+  const modeLabel = mode === "classic" ? "Classic" : "Global";
   return new EmbedBuilder()
     .setColor(0xf59e0b)
     .setTitle("📋 בקשת דמות חדשה לאישור")
     .addFields(
       { name: "דמות", value: req.name, inline: true },
-      { name: "עולם", value: req.world, inline: true },
+      { name: "עולם", value: `${req.world} (${modeLabel})`, inline: true },
       { name: "משתמש", value: `<@${discordId}>`, inline: true },
       { name: "קוד אימות", value: `\`${req.code}\``, inline: true },
     )
@@ -52,7 +55,7 @@ async function sendVerificationDM(client, req) {
       .setColor(0xd4a96a)
       .setTitle("🎮 אימות דמות — MSC Israel")
       .setDescription(
-        `קיבלנו בקשה לרשום את הדמות **${req.name}** (${req.world}) תחת חשבונך.\n\n` +
+        `קיבלנו בקשה לרשום את הדמות **${req.name}** (${req.world}, ${normalizeMode(req.mode) === "classic" ? "Classic" : "Global"}) תחת חשבונך.\n\n` +
         `כדי לאמת שהדמות שייכת לך:\n` +
         `**1)** היכנס למשחק עם הדמות **${req.name}**\n` +
         `**2)** שלח הודעת צ'אט עם הקוד:\n\n` +
@@ -111,7 +114,16 @@ function watchPendingCharacters(client) {
   console.log("✅ Watching PendingCharacter collection");
 }
 
-async function resolveAdminTargets() {
+async function resolveAdminTargets(world, mode = "global") {
+  const guilds = await getGuildsForAdminWorld(world, mode);
+  if (guilds.length) {
+    return guilds.map((cfg) => ({
+      guildId: cfg.guildId,
+      channelId: cfg.adminChannelId,
+    }));
+  }
+
+  // Env fallback when no GuildConfig admin channels yet
   if (ADMIN_CHANNEL_ID) {
     return [{ guildId: null, channelId: ADMIN_CHANNEL_ID }];
   }
@@ -151,9 +163,10 @@ function watchDMScreenshots(client) {
       const imgBuffer = await downloadBuffer(attachment.url);
       const ext = attachment.contentType === "image/png" ? "png" : attachment.contentType === "image/webp" ? "webp" : "jpg";
 
-      const targets = await resolveAdminTargets(req.world);
+      const targets = await resolveAdminTargets(req.world, req.mode);
       if (!targets.length) {
-        await message.reply(`❌ אין ערוץ אדמין מוגדר לעולם **${req.world}**. פנה למנהל השרת.`);
+        const modeLabel = normalizeMode(req.mode) === "classic" ? "Classic" : "Global";
+        await message.reply(`❌ אין ערוץ אדמין מוגדר לעולם **${req.world}** (${modeLabel}). פנה למנהל השרת.`);
         return;
       }
 

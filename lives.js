@@ -9,8 +9,7 @@ const {
 } = require("./config");
 const { applyUpdatedLine } = require("./lib/embedUpdatedLine");
 const { fetchMessageByIds } = require("./lib/findBotMessage");
-
-let cachedLivesMessageId = LIVES_MESSAGE_ID || null;
+const { getGuildsWithLives, saveLivesMessageId } = require("./lib/guildConfig");
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -290,32 +289,106 @@ function applyLivesUpdatedLine(embed, updatedAt = Date.now()) {
   return applyUpdatedLine(embed, updatedAt, livesUpdatedIntervalText());
 }
 
-function livesMessageIds() {
-  const ids = [];
-  if (LIVES_MESSAGE_ID) ids.push(LIVES_MESSAGE_ID);
-  if (cachedLivesMessageId && cachedLivesMessageId !== LIVES_MESSAGE_ID) {
-    ids.push(cachedLivesMessageId);
+function buildLivesEmbed(liveStreamers, liveData, updatedAt = Date.now()) {
+  if (liveStreamers.length === 0) {
+    return applyLivesUpdatedLine(
+      new EmbedBuilder()
+        .setColor(LIVE_EMBED_COLOR)
+        .setTitle(LIVES_TITLE)
+        .setDescription("No live streams right now."),
+      updatedAt,
+    );
   }
-  return ids;
+
+  const rows = liveStreamers.map((streamer) => {
+    const name = streamer.name;
+    const key = liveKey(streamer.platform, String(streamer._id));
+    const stream = liveData[key] || {};
+    const titleText = stream.title || "";
+    const viewers = (stream.viewers || 0).toLocaleString();
+    const login = stream.login || streamer.name;
+    const baseUrl = PLATFORM_URLS[streamer.platform] || PLATFORM_URLS.twitch;
+
+    return buildTableRow(
+      formatStreamerLine(streamer, name, `${baseUrl}${login}`),
+      titleText,
+      `${LRM}👁 ${viewers}`,
+    );
+  });
+
+  const shownRows = fitRowsToEmbed(rows);
+  const streamerColumn = joinColumn(shownRows, "streamer");
+  const statusColumn = joinColumn(shownRows, "status");
+  const viewersColumn = joinColumn(shownRows, "viewers");
+
+  return applyLivesUpdatedLine(
+    new EmbedBuilder()
+      .setColor(LIVE_EMBED_COLOR)
+      .setTitle(LIVES_TITLE)
+      .addFields(
+        { name: "Streamer", value: streamerColumn || "—", inline: true },
+        { name: "Status", value: statusColumn || "—", inline: true },
+        { name: "Viewers", value: viewersColumn || "—", inline: true },
+      ),
+    updatedAt,
+  );
 }
 
-async function resolveLivesMessage(channel, client) {
-  return fetchMessageByIds(channel, client, livesMessageIds());
+async function postOrEditLives(client, channelId, messageId, embed, guildId) {
+  const channel = await client.channels.fetch(channelId);
+  if (!channel) {
+    console.error(`❌ Lives channel not found: ${channelId}`);
+    return null;
+  }
+
+  const resolvedGuildId = guildId || channel.guildId || null;
+  const msg = await fetchMessageByIds(channel, client, [messageId].filter(Boolean));
+
+  if (msg) {
+    try {
+      await msg.edit({ embeds: [embed], components: [] });
+      await saveLivesMessageId(resolvedGuildId, msg.id);
+      return msg.id;
+    } catch (err) {
+      console.warn(`⚠️ Failed to edit lives message (${channelId}): ${err.message}`);
+    }
+  }
+
+  const newMsg = await channel.send({ embeds: [embed] });
+  await saveLivesMessageId(resolvedGuildId, newMsg.id);
+  console.log(`✅ Lives posted in ${channelId}: message ${newMsg.id}`);
+  return newMsg.id;
+}
+
+async function resolveLivesTargets() {
+  const guilds = await getGuildsWithLives();
+  const targets = guilds
+    .filter((cfg) => cfg.livesChannelId)
+    .map((cfg) => ({
+      guildId: cfg.guildId,
+      channelId: cfg.livesChannelId,
+      messageId: cfg.livesMessageId || null,
+    }));
+
+  if (!targets.length && LIVES_CHANNEL_ID) {
+    targets.push({
+      guildId: null,
+      channelId: LIVES_CHANNEL_ID,
+      messageId: LIVES_MESSAGE_ID || null,
+    });
+  }
+
+  return targets;
 }
 
 async function updateLivesMessage(client) {
-  if (!LIVES_CHANNEL_ID) {
-    console.warn("⚠️ LIVES_CHANNEL_ID not configured");
+  const targets = await resolveLivesTargets();
+  if (!targets.length) {
+    console.warn("⚠️ No lives channels configured");
     return;
   }
 
   try {
-    const channel = await client.channels.fetch(LIVES_CHANNEL_ID);
-    if (!channel) {
-      console.error("❌ Lives channel not found");
-      return;
-    }
-
     const streamers = await getStreamersForLives();
     const { supported, liveData } = await buildLiveData(streamers);
     const liveStreamers = sortLiveStreamers(
@@ -323,82 +396,23 @@ async function updateLivesMessage(client) {
       liveData,
     );
 
-    console.log(`📺 Lives: ${supported.length} streamers, ${liveStreamers.length} live`);
+    console.log(`📺 Lives: ${supported.length} streamers, ${liveStreamers.length} live → ${targets.length} message(s)`);
 
-    const savedMsg = await resolveLivesMessage(channel, client);
-    const updatedAt = Date.now();
+    const embed = buildLivesEmbed(liveStreamers, liveData, Date.now());
 
-    if (liveStreamers.length === 0) {
-      const noLiveEmbed = applyLivesUpdatedLine(
-        new EmbedBuilder()
-          .setColor(LIVE_EMBED_COLOR)
-          .setTitle(LIVES_TITLE)
-          .setDescription("No live streams right now."),
-        updatedAt,
-      );
-
-      if (savedMsg) {
-        try {
-          await savedMsg.edit({ embeds: [noLiveEmbed], components: [] });
-          cachedLivesMessageId = savedMsg.id;
-          return;
-        } catch (err) {
-          console.warn(`⚠️ Failed to edit lives message: ${err.message}`);
-        }
-      }
-
-      const msg = await channel.send({ embeds: [noLiveEmbed] });
-      cachedLivesMessageId = msg.id;
-      console.log(`✅ Lives posted: message ${msg.id} (set LIVES_MESSAGE_ID=${msg.id} to persist)`);
-      return;
-    }
-
-    const rows = liveStreamers.map((streamer) => {
-      const name = streamer.name;
-      const key = liveKey(streamer.platform, String(streamer._id));
-      const stream = liveData[key] || {};
-      const titleText = stream.title || "";
-      const viewers = (stream.viewers || 0).toLocaleString();
-      const login = stream.login || streamer.name;
-      const baseUrl = PLATFORM_URLS[streamer.platform] || PLATFORM_URLS.twitch;
-
-      return buildTableRow(
-        formatStreamerLine(streamer, name, `${baseUrl}${login}`),
-        titleText,
-        `${LRM}👁 ${viewers}`,
-      );
-    });
-
-    const shownRows = fitRowsToEmbed(rows);
-    const streamerColumn = joinColumn(shownRows, "streamer");
-    const statusColumn = joinColumn(shownRows, "status");
-    const viewersColumn = joinColumn(shownRows, "viewers");
-
-    const embed = applyLivesUpdatedLine(
-      new EmbedBuilder()
-        .setColor(LIVE_EMBED_COLOR)
-        .setTitle(LIVES_TITLE)
-        .addFields(
-          { name: "Streamer", value: streamerColumn || "—", inline: true },
-          { name: "Status", value: statusColumn || "—", inline: true },
-          { name: "Viewers", value: viewersColumn || "—", inline: true },
-        ),
-      updatedAt,
-    );
-
-    if (savedMsg) {
+    for (const target of targets) {
       try {
-        await savedMsg.edit({ embeds: [embed], components: [] });
-        cachedLivesMessageId = savedMsg.id;
-        return;
+        await postOrEditLives(
+          client,
+          target.channelId,
+          target.messageId,
+          embed,
+          target.guildId,
+        );
       } catch (err) {
-        console.warn(`⚠️ Failed to edit lives message: ${err.message}`);
+        console.error(`❌ Lives update failed for ${target.channelId}:`, err.message);
       }
     }
-
-    const msg = await channel.send({ embeds: [embed] });
-    cachedLivesMessageId = msg.id;
-    console.log(`✅ Lives posted: message ${msg.id} (set LIVES_MESSAGE_ID=${msg.id} to persist)`);
   } catch (err) {
     console.error("❌ Lives update failed:", err.stack || err.message);
   }

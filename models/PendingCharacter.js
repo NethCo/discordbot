@@ -4,6 +4,8 @@ const pendingCharacterSchema = new mongoose.Schema({
   uid: { type: String, required: true },
   name: { type: String, required: true },
   world: { type: String, required: true },
+  /** "global" (current MapleStory) or "classic" — same world name can exist in both */
+  mode: { type: String, enum: ["global", "classic"], default: "global" },
   code: { type: String, required: true },
   prtsc: { type: String, default: null },
   approved: { type: Boolean, default: false },
