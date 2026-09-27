@@ -1,7 +1,9 @@
 const mongoose = require("mongoose");
 
 const worldEntrySchema = new mongoose.Schema({
-  mode: { type: String, enum: ["global", "classic"], required: true },
+  /** "global" | "classic" | "all" (all modes) */
+  mode: { type: String, enum: ["global", "classic", "all"], required: true },
+  /** MapleStory world name, or "all" for every world in that mode */
   world: { type: String, required: true },
 }, { _id: false });
 
@@ -11,11 +13,14 @@ const guildConfigSchema = new mongoose.Schema({
 
   /**
    * Character-request routing ONLY (which admin channel gets which mode+world).
-   * Empty = this guild handles all modes/worlds (typical for the main community guild).
-   * Entries are { mode: "global"|"classic", world: "Scania" } so Global Scania ≠ Classic Scania.
+   * Default [{ mode: "all", world: "all" }] = every mode + world (main community guild).
+   * Examples: { mode: "global", world: "Scania" }, { mode: "classic", world: "all" }.
    * Never used for leaderboards/lives.
    */
-  worlds: { type: [worldEntrySchema], default: [] },
+  worlds: {
+    type: [worldEntrySchema],
+    default: () => [{ mode: "all", world: "all" }],
+  },
 
   /** Global rankings leaderboard message target */
   globalLeaderboardChannelId: { type: String, default: null },
