@@ -12,6 +12,7 @@ const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = req
 const { handleInteractions } = require("./interactions");
 const { updateMemberCountChannel, setupWelcome } = require("./welcome");
 const { migrateLegacyEnvConfig } = require("./lib/guildConfig");
+const { handleMsilCommand } = require("./msil");
 
 const client = new Client({
   intents: [
@@ -127,6 +128,14 @@ client.once(Events.ClientReady, async () => {
   watchHandledRequests(client);
 
   handleInteractions(client);
+
+  client.on(Events.InteractionCreate, async (interaction) => {
+    try {
+      await handleMsilCommand(interaction, client);
+    } catch (err) {
+      console.error("/msil handler error:", err);
+    }
+  });
 });
 
 client.login(DISCORD_TOKEN);

@@ -3,6 +3,7 @@ if (process.env.NODE_ENV !== "production") {
 }
 const { REST, Routes } = require("discord.js");
 const { DISCORD_TOKEN } = require("./config");
+const { msilCommands } = require("./msil");
 
 function getClientIdFromToken(token) {
   const part = token.split(".")[0];
@@ -18,9 +19,9 @@ async function registerCommands() {
   const clientId = getClientIdFromToken(DISCORD_TOKEN);
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 
-  console.log("🔄 מנקה פקודות slash...");
-  await rest.put(Routes.applicationCommands(clientId), { body: [] });
-  console.log("✅ הפקודות נוקו.");
+  console.log("🔄 רושם פקודות slash (/msil)...");
+  await rest.put(Routes.applicationCommands(clientId), { body: msilCommands });
+  console.log(`✅ נרשמו ${msilCommands.length} פקודות.`);
 }
 
 registerCommands().catch((err) => {
