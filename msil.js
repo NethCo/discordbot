@@ -80,6 +80,51 @@ function canManageGuild(interaction) {
   return interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) === true;
 }
 
+const CHANNEL_SLOT_LABELS = {
+  globalLeaderboardChannelId: "Global Rankings",
+  classicLeaderboardChannelId: "Classic Rankings",
+  livesChannelId: "Lives",
+  adminChannelId: "Admin",
+};
+
+/**
+ * Ensures every configured feature uses a different channel (XOR across all slots).
+ * `patch` overrides current config for the slots being set.
+ * Returns Hebrew error string, or null if OK.
+ */
+function findChannelConflict(cfg, patch = {}) {
+  const merged = {
+    globalLeaderboardChannelId: patch.globalLeaderboardChannelId !== undefined
+      ? patch.globalLeaderboardChannelId
+      : cfg?.globalLeaderboardChannelId || null,
+    classicLeaderboardChannelId: patch.classicLeaderboardChannelId !== undefined
+      ? patch.classicLeaderboardChannelId
+      : cfg?.classicLeaderboardChannelId || null,
+    livesChannelId: patch.livesChannelId !== undefined
+      ? patch.livesChannelId
+      : cfg?.livesChannelId || null,
+    adminChannelId: patch.adminChannelId !== undefined
+      ? patch.adminChannelId
+      : cfg?.adminChannelId || null,
+  };
+
+  const byId = new Map();
+  for (const [slot, channelId] of Object.entries(merged)) {
+    if (!channelId) continue;
+    const label = CHANNEL_SLOT_LABELS[slot];
+    if (byId.has(channelId)) {
+      return `❌ אותו ערוץ לא יכול לשמש לשני דברים.\n` +
+        `<#${channelId}> כבר מוגדר ל־**${byId.get(channelId)}**, אי אפשר גם ל־**${label}**.`;
+    }
+    byId.set(channelId, label);
+  }
+  return null;
+}
+
+async function loadGuildConfig(guildId) {
+  return GuildConfig.findOne({ guildId }).lean();
+}
+
 async function handleMsilCommand(interaction, client) {
   if (!interaction.isChatInputCommand() || interaction.commandName !== "msil") return false;
 
@@ -111,6 +156,14 @@ async function handleMsilCommand(interaction, client) {
         return true;
       }
 
+      if (globalChannel && classicChannel && globalChannel.id === classicChannel.id) {
+        await interaction.reply({
+          content: "❌ Global ו־Classic חייבים ערוצים שונים.",
+          ephemeral: true,
+        });
+        return true;
+      }
+
       const patch = { enabled: true };
       const lines = [];
       const modesToRefresh = [];
@@ -128,6 +181,13 @@ async function handleMsilCommand(interaction, client) {
         modesToRefresh.push("classic");
       }
 
+      const cfg = await loadGuildConfig(interaction.guildId);
+      const conflict = findChannelConflict(cfg, patch);
+      if (conflict) {
+        await interaction.reply({ content: conflict, ephemeral: true });
+        return true;
+      }
+
       await upsertGuildConfig(interaction.guildId, patch);
       await interaction.reply({
         content: `✅ ערוצי דירוגים עודכנו:\n${lines.join("\n")}\nמפרסם עכשיו…`,
@@ -142,11 +202,19 @@ async function handleMsilCommand(interaction, client) {
 
     if (sub === "lives") {
       const channel = interaction.options.getChannel("channel");
-      await upsertGuildConfig(interaction.guildId, {
+      const patch = {
         enabled: true,
         livesChannelId: channel.id,
         livesMessageId: null,
-      });
+      };
+      const cfg = await loadGuildConfig(interaction.guildId);
+      const conflict = findChannelConflict(cfg, patch);
+      if (conflict) {
+        await interaction.reply({ content: conflict, ephemeral: true });
+        return true;
+      }
+
+      await upsertGuildConfig(interaction.guildId, patch);
       await interaction.reply({
         content: `✅ ערוץ לייבים: ${channel}\nמפרסם עכשיו…`,
         ephemeral: true,
@@ -157,10 +225,18 @@ async function handleMsilCommand(interaction, client) {
 
     if (sub === "admin") {
       const channel = interaction.options.getChannel("channel");
-      await upsertGuildConfig(interaction.guildId, {
+      const patch = {
         enabled: true,
         adminChannelId: channel.id,
-      });
+      };
+      const cfg = await loadGuildConfig(interaction.guildId);
+      const conflict = findChannelConflict(cfg, patch);
+      if (conflict) {
+        await interaction.reply({ content: conflict, ephemeral: true });
+        return true;
+      }
+
+      await upsertGuildConfig(interaction.guildId, patch);
       await interaction.reply({
         content: `✅ ערוץ אישור דמויות: ${channel}`,
         ephemeral: true,
@@ -169,7 +245,7 @@ async function handleMsilCommand(interaction, client) {
     }
 
     if (sub === "show") {
-      const cfg = await GuildConfig.findOne({ guildId: interaction.guildId }).lean();
+      const cfg = await loadGuildConfig(interaction.guildId);
       if (!cfg) {
         await interaction.reply({
           content:
