@@ -9,6 +9,7 @@ module.exports = {
   ADMIN_CHANNEL_ID:         process.env.ADMIN_CHANNEL_ID,
   WELCOME_CHANNEL_ID:       process.env.WELCOME_CHANNEL_ID,
   MEMBER_COUNT_CHANNEL_ID:  process.env.MEMBER_COUNT_CHANNEL_ID,
+  STATUS_CHANNEL_ID:        process.env.STATUS_CHANNEL_ID,
   LIVES_CHANNEL_ID:         process.env.LIVES_CHANNEL_ID,
   LIVES_MESSAGE_ID:         process.env.LIVES_MESSAGE_ID,
   WEBSITE_URL:              process.env.WEBSITE_URL,
