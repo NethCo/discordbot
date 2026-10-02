@@ -288,12 +288,22 @@ function wrapWords(text, maxLen) {
 
 function splitPlayerLines(c, withArrow = false) {
   const arrow = withArrow && c.isCurrent ? "➡️" : "";
-  // My-rank: keep [World] and name on one line (no hard wrap; NBSP resists soft wrap).
-  const worldNameSep = withArrow ? "\u00A0" : " ";
-  const head = `${LRM}${arrow}${formatRankPart(c.rank)}${worldTag(c.world)}${worldNameSep}`;
+
+  // My-rank: one physical line, NBSP so Discord won't split rank/world/name.
+  if (withArrow) {
+    const parts = [
+      arrow || null,
+      `${c.rank}.`,
+      worldTag(c.world),
+      formatPlayerName(c),
+    ].filter(Boolean);
+    return [`${LRM}${parts.join("\u00A0")}`];
+  }
+
+  const head = `${LRM}${arrow}${formatRankPart(c.rank)}${worldTag(c.world)} `;
   const name = formatPlayerName(c);
   const oneLine = `${head}${name}${COLUMN_GAP}`;
-  if (withArrow || oneLine.length <= PLAYER_WRAP) return [oneLine];
+  if (oneLine.length <= PLAYER_WRAP) return [oneLine];
 
   const nameLines = wrapWords(name, Math.max(6, PLAYER_WRAP - head.length));
   const lines = [`${head}${nameLines[0]}`];
@@ -306,7 +316,8 @@ function splitPlayerLines(c, withArrow = false) {
 
 function buildRankRow(c, withArrow = false) {
   const playerLines = splitPlayerLines(c, withArrow);
-  const jobLine = `${LRM}${formatJobName(c)}${COLUMN_GAP}`;
+  const gap = withArrow ? " " : COLUMN_GAP;
+  const jobLine = `${LRM}${formatJobName(c)}${gap}`;
   const levelLine = `${LRM}${formatLevelWithExpPercent(c.lvl, c.exp)}`;
   const pad = (line) => [line, ...Array(Math.max(0, playerLines.length - 1)).fill(LRM)].join("\n");
 
@@ -340,7 +351,27 @@ function buildTableFields(rows, withArrow = false) {
 }
 
 function buildRankNeighborFields(neighbors) {
-  return buildTableFields(neighbors, true);
+  // Two columns so Player gets ~half the embed width (3 equal cols still wrap long worlds).
+  if (!neighbors.length) {
+    return [
+      { name: "Player", value: "—", inline: true },
+      { name: "Job · Level", value: "—", inline: true },
+    ];
+  }
+
+  const players = [];
+  const jobLevels = [];
+  for (const c of neighbors) {
+    players.push(splitPlayerLines(c, true)[0]);
+    jobLevels.push(
+      `${LRM}${formatJobName(c)} · ${formatLevelWithExpPercent(c.lvl, c.exp)}`,
+    );
+  }
+
+  return [
+    { name: "Player", value: joinColumn(players), inline: true },
+    { name: "Job · Level", value: joinColumn(jobLevels), inline: true },
+  ];
 }
 
 function buildLeaderboardEmbed(top10, mode = "global", updatedAt = Date.now()) {

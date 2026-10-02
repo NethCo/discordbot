@@ -42,21 +42,19 @@ async function buildPersonalRankEmbed({ charData, neighbors, avatarUrl, client }
   const updatedLine = await ensureLeaderboardFooter(client);
   const updatedAt = parseUpdatedAtFromLine(updatedLine) || Date.now();
 
+  // No setThumbnail: Discord reserves a right column for it and squeezes the table/footer.
   let embed = new EmbedBuilder()
     .setColor(0xff6600)
     .setTitle(name)
     .setAuthor({
       name: "MSIsrael.gg",
       url: WEBSITE_RANKINGS_URL,
+      ...(avatarUrl ? { iconURL: avatarUrl } : {}),
     })
     .setDescription(`\u200E${statsLine}`)
     .addFields(...buildRankNeighborFields(neighbors));
 
   embed = applyUpdatedLine(embed, updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT);
-
-  if (avatarUrl) {
-    embed.setThumbnail(avatarUrl);
-  }
 
   return embed;
 }
