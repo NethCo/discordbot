@@ -1,4 +1,6 @@
-const LIVES_UPDATE_INTERVAL_MINUTES = Number(process.env.LIVES_UPDATE_INTERVAL_MINUTES) || 20;
+require("dotenv").config();
+
+const LIVES_UPDATE_INTERVAL_MINUTES = 20;
 
 module.exports = {
   DISCORD_TOKEN:            process.env.DISCORD_TOKEN,
@@ -14,7 +16,6 @@ module.exports = {
   LIVES_MESSAGE_ID:         process.env.LIVES_MESSAGE_ID,
   WEBSITE_URL:              process.env.WEBSITE_URL,
   WEBSITE_RANKINGS_URL:     process.env.WEBSITE_RANKINGS_URL,
-  WEBSITE_CLASSIC_RANKINGS_URL: process.env.WEBSITE_CLASSIC_RANKINGS_URL || process.env.WEBSITE_RANKINGS_URL,
   SERVER_URL:               process.env.SERVER_URL,
   KICK_CLIENT_ID:           process.env.KICK_CLIENT_ID,
   KICK_CLIENT_SECRET:       process.env.KICK_CLIENT_SECRET,

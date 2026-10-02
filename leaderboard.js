@@ -3,7 +3,6 @@ const Character = require("./models/Character");
 const User = require("./models/User");
 const {
   WEBSITE_RANKINGS_URL,
-  WEBSITE_CLASSIC_RANKINGS_URL,
   LEADERBOARD_CHANNEL_ID,
   LEADERBOARD_MESSAGE_ID,
 } = require("./config");
@@ -30,7 +29,7 @@ const LEADERBOARD_TITLES = {
 
 const RANKINGS_URLS = {
   global: WEBSITE_RANKINGS_URL,
-  classic: WEBSITE_CLASSIC_RANKINGS_URL || WEBSITE_RANKINGS_URL,
+  classic: WEBSITE_RANKINGS_URL,
 };
 
 const LRM = "\u200E";
@@ -289,7 +288,8 @@ function wrapWords(text, maxLen) {
 function splitPlayerLines(c, withArrow = false) {
   const arrow = withArrow && c.isCurrent ? "➡️" : "";
 
-  // My-rank: one physical line, NBSP so Discord won't split rank/world/name.
+  // My-rank: one line, NBSP so Discord won't split rank/world/name.
+  // No trailing em-spaces — they soft-wrap into a phantom blank line and desync columns.
   if (withArrow) {
     const parts = [
       arrow || null,
@@ -316,7 +316,8 @@ function splitPlayerLines(c, withArrow = false) {
 
 function buildRankRow(c, withArrow = false) {
   const playerLines = splitPlayerLines(c, withArrow);
-  const gap = withArrow ? " " : COLUMN_GAP;
+  // My-rank: light gap on Job only (Player must stay a single unwrapped line).
+  const gap = withArrow ? "\u2003" : COLUMN_GAP;
   const jobLine = `${LRM}${formatJobName(c)}${gap}`;
   const levelLine = `${LRM}${formatLevelWithExpPercent(c.lvl, c.exp)}`;
   const pad = (line) => [line, ...Array(Math.max(0, playerLines.length - 1)).fill(LRM)].join("\n");
@@ -351,27 +352,7 @@ function buildTableFields(rows, withArrow = false) {
 }
 
 function buildRankNeighborFields(neighbors) {
-  // Two columns so Player gets ~half the embed width (3 equal cols still wrap long worlds).
-  if (!neighbors.length) {
-    return [
-      { name: "Player", value: "—", inline: true },
-      { name: "Job · Level", value: "—", inline: true },
-    ];
-  }
-
-  const players = [];
-  const jobLevels = [];
-  for (const c of neighbors) {
-    players.push(splitPlayerLines(c, true)[0]);
-    jobLevels.push(
-      `${LRM}${formatJobName(c)} · ${formatLevelWithExpPercent(c.lvl, c.exp)}`,
-    );
-  }
-
-  return [
-    { name: "Player", value: joinColumn(players), inline: true },
-    { name: "Job · Level", value: joinColumn(jobLevels), inline: true },
-  ];
+  return buildTableFields(neighbors, true);
 }
 
 function buildLeaderboardEmbed(top10, mode = "global", updatedAt = Date.now()) {

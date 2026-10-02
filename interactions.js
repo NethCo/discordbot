@@ -42,21 +42,19 @@ async function buildPersonalRankEmbed({ charData, neighbors, avatarUrl, client }
   const updatedLine = await ensureLeaderboardFooter(client);
   const updatedAt = parseUpdatedAtFromLine(updatedLine) || Date.now();
 
-  // No setThumbnail: Discord reserves a right column for it and squeezes the table/footer.
   let embed = new EmbedBuilder()
     .setColor(0xff6600)
     .setTitle(name)
-    .setAuthor({
-      name: "MSIsrael.gg",
-      url: WEBSITE_RANKINGS_URL,
-      ...(avatarUrl ? { iconURL: avatarUrl } : {}),
-    })
-    .setDescription(`\u200E${statsLine}`)
+    .setAuthor({ name: "MSIsrael.gg", url: WEBSITE_RANKINGS_URL })
+    // One blank line so the table sits just below the avatar
+    .setDescription(`\u200E${statsLine}\n\u200B`)
     .addFields(...buildRankNeighborFields(neighbors));
+
+  if (avatarUrl) embed.setThumbnail(avatarUrl);
 
   embed = applyUpdatedLine(embed, updatedAt, LEADERBOARD_UPDATE_INTERVAL_TEXT);
 
-  return embed;
+  return [embed];
 }
 
 async function replyWithPersonalRank(interaction, charData) {
@@ -64,14 +62,14 @@ async function replyWithPersonalRank(interaction, charData) {
     getCharactersAroundRank(charData),
     resolveCharacterAvatar(charData),
   ]);
-  const embed = await buildPersonalRankEmbed({
+  const embeds = await buildPersonalRankEmbed({
     charData,
     neighbors,
     avatarUrl,
     client: interaction.client,
   });
 
-  await interaction.editReply({ content: null, embeds: [embed], components: [] });
+  await interaction.editReply({ content: null, embeds, components: [] });
   setTimeout(async () => { try { await interaction.deleteReply(); } catch {} }, 60_000);
 }
 

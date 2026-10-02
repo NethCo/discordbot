@@ -132,30 +132,7 @@ function scheduleDailyLeaderboard(client) {
 client.once(Events.ClientReady, async () => {
   console.log(`✅ בוט מחובר כ: ${client.user.tag}`);
 
-  await connectDB();
-  console.log("🟢 MongoDB ready");
-
-  await migrateLegacyEnvConfig(client);
-
-  scheduleDailyLeaderboard(client);
-
-  await syncCharacterStats();
-  await updateLeaderboard(client);
-  await updateLivesMessage(client);
-  setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
-
-  await updateBotStatus();
-  scheduleDailyStatusRefresh();
-
-  await updateMemberCountChannel(client, { force: true });
-  setupWelcome(client);
-
-  watchPendingCharacters(client);
-  watchDMScreenshots(client);
-  watchHandledRequests(client);
-
   handleInteractions(client);
-
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
       await handleMsilCommand(interaction, client);
@@ -163,6 +140,32 @@ client.once(Events.ClientReady, async () => {
       console.error("/msil handler error:", err);
     }
   });
+
+  try {
+    await connectDB();
+    console.log("🟢 MongoDB ready");
+
+    await migrateLegacyEnvConfig(client);
+
+    scheduleDailyLeaderboard(client);
+
+    await syncCharacterStats();
+    await updateLeaderboard(client);
+    await updateLivesMessage(client);
+    setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
+
+    await updateBotStatus();
+    scheduleDailyStatusRefresh();
+
+    await updateMemberCountChannel(client, { force: true });
+    setupWelcome(client);
+
+    watchPendingCharacters(client);
+    watchDMScreenshots(client);
+    watchHandledRequests(client);
+  } catch (err) {
+    console.error("❌ startup failed:", err);
+  }
 });
 
 client.login(DISCORD_TOKEN);
