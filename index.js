@@ -1,6 +1,4 @@
-if (process.env.NODE_ENV !== "production") {
-  require("dotenv").config();
-}
+require("dotenv").config();
 const { Client, GatewayIntentBits, Partials, Events } = require("discord.js");
 const { connectDB } = require("./db");
 const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES, STATUS_CHANNEL_ID } = require("./config");

@@ -288,10 +288,12 @@ function wrapWords(text, maxLen) {
 
 function splitPlayerLines(c, withArrow = false) {
   const arrow = withArrow && c.isCurrent ? "➡️" : "";
-  const head = `${LRM}${arrow}${formatRankPart(c.rank)}${worldTag(c.world)} `;
+  // My-rank: keep [World] and name on one line (no hard wrap; NBSP resists soft wrap).
+  const worldNameSep = withArrow ? "\u00A0" : " ";
+  const head = `${LRM}${arrow}${formatRankPart(c.rank)}${worldTag(c.world)}${worldNameSep}`;
   const name = formatPlayerName(c);
   const oneLine = `${head}${name}${COLUMN_GAP}`;
-  if (oneLine.length <= PLAYER_WRAP) return [oneLine];
+  if (withArrow || oneLine.length <= PLAYER_WRAP) return [oneLine];
 
   const nameLines = wrapWords(name, Math.max(6, PLAYER_WRAP - head.length));
   const lines = [`${head}${nameLines[0]}`];
