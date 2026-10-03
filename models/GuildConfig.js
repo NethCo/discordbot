@@ -35,6 +35,9 @@ const guildConfigSchema = new mongoose.Schema({
 
   /** Where character verification requests are posted for this guild */
   adminChannelId: { type: String, default: null },
+
+  /** Where new magazine articles are announced for this guild */
+  magazineChannelId: { type: String, default: null },
 }, { timestamps: true, versionKey: false, collection: "guildconfigs" });
 
 module.exports = mongoose.model("GuildConfig", guildConfigSchema);

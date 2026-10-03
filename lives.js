@@ -1,15 +1,19 @@
 const { EmbedBuilder } = require("discord.js");
 const {
   LIVES_UPDATE_INTERVAL_MINUTES,
-  SERVER_URL,
   KICK_CLIENT_ID,
   KICK_CLIENT_SECRET,
+  TWITCH_CLIENT_ID,
+  TWITCH_CLIENT_SECRET,
+  TWITCH_APP_TOKEN,
   LIVES_CHANNEL_ID,
   LIVES_MESSAGE_ID,
 } = require("./config");
 const { applyUpdatedLine } = require("./lib/embedUpdatedLine");
 const { fetchMessageByIds } = require("./lib/findBotMessage");
 const { getGuildsWithLives, saveLivesMessageId } = require("./lib/guildConfig");
+const Streamer = require("./models/Streamer");
+const User = require("./models/User");
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -39,6 +43,8 @@ const LIVES_TITLE = "Live Streams";
 
 let kickToken = null;
 let kickTokenExpiry = 0;
+let twitchToken = null;
+let twitchTokenExpiry = 0;
 
 function isWorldStreamer(uid) {
   return uid === WORLD_STREAMER_UID;
@@ -167,6 +173,38 @@ async function getKickAppToken() {
   return kickToken;
 }
 
+async function getTwitchAppToken() {
+  if (twitchToken && Date.now() < twitchTokenExpiry - 60_000) return twitchToken;
+
+  if (TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET) {
+    const res = await fetch("https://id.twitch.tv/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: TWITCH_CLIENT_ID,
+        client_secret: TWITCH_CLIENT_SECRET,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Twitch token request failed (${res.status})`);
+
+    const data = await res.json();
+    twitchToken = data.access_token;
+    twitchTokenExpiry = Date.now() + (Number(data.expires_in) || 3600) * 1000;
+    return twitchToken;
+  }
+
+  if (TWITCH_APP_TOKEN) {
+    twitchToken = TWITCH_APP_TOKEN;
+    // Static token from env — refresh only when Helix returns 401.
+    twitchTokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
+    return twitchToken;
+  }
+
+  throw new Error("Twitch credentials missing");
+}
+
 async function fetchKickStreamsDirect(userIds) {
   if (!userIds.length) return {};
 
@@ -204,49 +242,75 @@ async function fetchKickStreamsDirect(userIds) {
   return map;
 }
 
+async function fetchTwitchStreamsDirect(userIds) {
+  if (!userIds.length) return {};
+  if (!TWITCH_CLIENT_ID) throw new Error("TWITCH_CLIENT_ID missing");
+
+  const params = userIds
+    .slice(0, 100)
+    .map((id) => `user_id=${encodeURIComponent(id)}`)
+    .join("&");
+
+  const token = await getTwitchAppToken();
+  const res = await fetch(`https://api.twitch.tv/helix/streams?${params}`, {
+    headers: {
+      "Client-Id": TWITCH_CLIENT_ID,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (res.status === 401) {
+    twitchToken = null;
+    twitchTokenExpiry = 0;
+    throw new Error("Twitch token unauthorized (401)");
+  }
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Twitch streams failed (${res.status}): ${body}`);
+  }
+
+  const data = await res.json();
+  const map = {};
+
+  (data.data || []).forEach((s) => {
+    if (s?.user_id == null) return;
+    map[String(s.user_id)] = {
+      title: s.title || "",
+      thumbnail: (s.thumbnail_url || "").replace("{width}", "320").replace("{height}", "180"),
+      activity: s.game_name || "",
+      viewers: Number(s.viewer_count) || 0,
+      startedAt: s.started_at || "",
+      login: s.user_login || "",
+    };
+  });
+
+  return map;
+}
+
 async function fetchPlatformStreams(platform, userIds) {
   if (!userIds.length) return {};
 
-  if (platform === "kick" && KICK_CLIENT_ID && KICK_CLIENT_SECRET) {
-    try {
-      return await fetchKickStreamsDirect(userIds);
-    } catch (err) {
-      console.error("❌ Kick API ישיר:", err.message);
-    }
-  }
-
-  if (!SERVER_URL) return {};
-
   try {
-    const res = await fetch(
-      `${SERVER_URL}/api/${platform}?id=${encodeURIComponent(userIds.join(","))}`,
-    );
-    if (!res.ok) {
-      const body = await res.text();
-      console.warn(`⚠️ ${platform} proxy responded with ${res.status}: ${body}`);
-      return {};
-    }
-    const data = await res.json();
-    if (data?.error) {
-      console.warn(`⚠️ ${platform} proxy error: ${data.error}`);
-      return {};
-    }
-    return data;
+    if (platform === "kick") return await fetchKickStreamsDirect(userIds);
+    if (platform === "twitch") return await fetchTwitchStreamsDirect(userIds);
   } catch (err) {
-    console.error(`❌ שגיאה ב-${platform} API:`, err.message);
-    return {};
+    console.error(`❌ ${platform} API:`, err.message);
   }
+
+  return {};
 }
 
 async function getStreamersForLives() {
-  if (!SERVER_URL) return [];
   try {
-    const res = await fetch(SERVER_URL + "/api/streamers?lives=true");
-    if (!res.ok) return [];
-    const list = await res.json();
-    return Array.isArray(list) ? list : [];
+    const approvedUids = await User.distinct("_id", {
+      "auth.streamer_approved": true,
+    });
+    return await Streamer.find({
+      uid: { $in: [...approvedUids, WORLD_STREAMER_UID] },
+    }).lean();
   } catch (err) {
-    console.error("❌ שגיאה בטעינת סטרימרים מהשרת:", err.message);
+    console.error("❌ שגיאה בטעינת סטרימרים מ-MongoDB:", err.message);
     return [];
   }
 }

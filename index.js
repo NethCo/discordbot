@@ -11,6 +11,7 @@ const { handleInteractions } = require("./interactions");
 const { updateMemberCountChannel, setupWelcome } = require("./welcome");
 const { migrateLegacyEnvConfig } = require("./lib/guildConfig");
 const { handleMsilCommand } = require("./msil");
+const { watchMagazinePublishes, drainPendingMagazineNotifies } = require("./magazine");
 
 const DEFAULT_BOT_STATUS = "🍁 MSIsrael.gg";
 
@@ -163,6 +164,9 @@ client.once(Events.ClientReady, async () => {
     watchPendingCharacters(client);
     watchDMScreenshots(client);
     watchHandledRequests(client);
+
+    await drainPendingMagazineNotifies(client);
+    watchMagazinePublishes(client);
   } catch (err) {
     console.error("❌ startup failed:", err);
   }

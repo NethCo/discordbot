@@ -62,6 +62,18 @@ const msilCommands = [
     )
     .addSubcommand((sub) =>
       sub
+        .setName("magazine")
+        .setDescription("הגדר ערוץ להודעות על כתבות חדשות במגזין")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("ערוץ טקסט למגזין")
+            .addChannelTypes(...TEXT_CHANNELS)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName("show")
         .setDescription("הצג את הערוצים וההגדרות הנוכחיים"),
     )
@@ -85,6 +97,7 @@ const CHANNEL_SLOT_LABELS = {
   classicLeaderboardChannelId: "Classic Rankings",
   livesChannelId: "Lives",
   adminChannelId: "Admin",
+  magazineChannelId: "Magazine",
 };
 
 /**
@@ -106,6 +119,9 @@ function findChannelConflict(cfg, patch = {}) {
     adminChannelId: patch.adminChannelId !== undefined
       ? patch.adminChannelId
       : cfg?.adminChannelId || null,
+    magazineChannelId: patch.magazineChannelId !== undefined
+      ? patch.magazineChannelId
+      : cfg?.magazineChannelId || null,
   };
 
   const byId = new Map();
@@ -244,13 +260,34 @@ async function handleMsilCommand(interaction, client) {
       return true;
     }
 
+    if (sub === "magazine") {
+      const channel = interaction.options.getChannel("channel");
+      const patch = {
+        enabled: true,
+        magazineChannelId: channel.id,
+      };
+      const cfg = await loadGuildConfig(interaction.guildId);
+      const conflict = findChannelConflict(cfg, patch);
+      if (conflict) {
+        await interaction.reply({ content: conflict, ephemeral: true });
+        return true;
+      }
+
+      await upsertGuildConfig(interaction.guildId, patch);
+      await interaction.reply({
+        content: `✅ ערוץ מגזין: ${channel}\nכתבות חדשות מהאתר יפורסמו כאן.`,
+        ephemeral: true,
+      });
+      return true;
+    }
+
     if (sub === "show") {
       const cfg = await loadGuildConfig(interaction.guildId);
       if (!cfg) {
         await interaction.reply({
           content:
             "אין הגדרות לשרת הזה עדיין.\n" +
-            "השתמש ב־`/msil rankings`, `/msil lives`, `/msil admin`.",
+            "השתמש ב־`/msil rankings`, `/msil lives`, `/msil admin`, `/msil magazine`.",
           ephemeral: true,
         });
         return true;
@@ -265,6 +302,7 @@ async function handleMsilCommand(interaction, client) {
           { name: "Classic Rankings", value: formatChannel(cfg.classicLeaderboardChannelId), inline: true },
           { name: "Lives", value: formatChannel(cfg.livesChannelId), inline: true },
           { name: "Admin", value: formatChannel(cfg.adminChannelId), inline: true },
+          { name: "Magazine", value: formatChannel(cfg.magazineChannelId), inline: true },
         );
 
       await interaction.reply({ embeds: [embed], ephemeral: true });
@@ -281,6 +319,7 @@ async function handleMsilCommand(interaction, client) {
         livesChannelId: null,
         livesMessageId: null,
         adminChannelId: null,
+        magazineChannelId: null,
       });
       await interaction.reply({
         content: "✅ כל בחירות הערוצים נוקו (הגדרות worlds ב־DB נשארו כמו שהן).",
