@@ -9,6 +9,8 @@ const botSyncSchema = new mongoose.Schema({
   rankingsLastSyncAt: Date,
   rankingsLastAttemptAt: Date,
   rankingsLastSyncError: String,
+  livesLastSyncAt: Date,
+  statusLastSyncAt: Date,
   topCount: Number,
 }, { timestamps: true, versionKey: false });
 

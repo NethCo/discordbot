@@ -4,15 +4,7 @@ const { WEBSITE_URL } = require("./config");
 const { getGuildsWithMagazine } = require("./lib/guildConfig");
 
 const MAGAZINE_EMBED_COLOR = 0xd95000;
-
-const CATEGORY_LABELS = {
-  patch_notes: "פאץ' נוטס",
-  patch: "פאץ' נוטס",
-  article: "כתבה",
-  guide: "מדריך",
-  update: "עדכון",
-  community: "קהילה",
-};
+const RLM = "\u200F";
 
 function siteBase() {
   return (WEBSITE_URL || "https://msisrael.gg").replace(/\/$/, "");
@@ -24,37 +16,44 @@ function articleUrl(doc) {
   return `${siteBase()}/magazine/${path}`;
 }
 
-function categoryLabel(raw) {
-  const key = String(raw || "article").trim();
-  return CATEGORY_LABELS[key] || CATEGORY_LABELS.article;
-}
-
 function isPublished(doc) {
   return doc?.draft !== true;
 }
 
-function buildMagazineEmbed(doc) {
+/**
+ * Right-align a line in Discord embeds (same trick as lib/embedUpdatedLine.js).
+ * Must use figure space \u2007 (bidi WS/neutral). Braille blank \u2800 is strong LTR
+ * and pins Hebrew to the left — that was why the title stayed left-aligned.
+ */
+function rtlLine(text, width = 72) {
+  return `${RLM}${text}`.padEnd(width, "\u2007");
+}
+
+function buildMagazineEmbed(doc, { botIcon } = {}) {
   const url = articleUrl(doc);
-  const title = String(doc.title || "כתבה חדשה").slice(0, 256);
+  const title = String(doc.title || "כתבה חדשה").slice(0, 250);
   const summ = typeof doc.summ === "string" ? doc.summ.trim().slice(0, 400) : "";
   const img = typeof doc.img === "string" ? doc.img.trim() : "";
   const author = typeof doc.author === "string" ? doc.author.trim() : "";
 
+  const description = [rtlLine(`📰  **[${title}](${url})**  📰`)];
+  if (summ) description.push(rtlLine(summ));
+
   const embed = new EmbedBuilder()
     .setColor(MAGAZINE_EMBED_COLOR)
-    .setTitle(title)
-    .setURL(url)
-    .setFooter({ text: "מגזין MSIsrael" })
-    .setTimestamp(doc.createdAt ? new Date(doc.createdAt) : new Date());
+    .setDescription(description.join("\n\n"))
+    .setFooter({
+      text: "MSIsrael.gg • קהילת מייפל סטורי ישראל",
+      ...(botIcon ? { iconURL: botIcon } : {}),
+    });
 
-  if (summ) embed.setDescription(summ);
   if (img) embed.setImage(img);
 
-  const fields = [
-    { name: "קטגוריה", value: categoryLabel(doc.category), inline: true },
-  ];
-  if (author) fields.push({ name: "מחבר", value: author.slice(0, 100), inline: true });
-  fields.push({ name: "קישור", value: `[קרא באתר](${url})`, inline: false });
+  const fields = [];
+  if (author) {
+    fields.push({ name: "\u200b", value: rtlLine(`מחבר: ${author.slice(0, 100)}`), inline: false });
+  }
+  fields.push({ name: "\u200b", value: rtlLine(`**[לקריאה באתר](${url})**`), inline: false });
   embed.addFields(fields);
 
   return embed;
@@ -67,7 +66,8 @@ async function postMagazineArticle(client, doc) {
     return 0;
   }
 
-  const embed = buildMagazineEmbed(doc);
+  const botIcon = client.user?.displayAvatarURL({ dynamic: true });
+  const embed = buildMagazineEmbed(doc, { botIcon });
   let posted = 0;
 
   for (const cfg of guilds) {

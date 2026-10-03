@@ -12,6 +12,7 @@ const {
 const { applyUpdatedLine } = require("./lib/embedUpdatedLine");
 const { fetchMessageByIds } = require("./lib/findBotMessage");
 const { getGuildsWithLives, saveLivesMessageId } = require("./lib/guildConfig");
+const BotSync = require("./models/BotSync");
 const Streamer = require("./models/Streamer");
 const User = require("./models/User");
 
@@ -462,7 +463,8 @@ async function updateLivesMessage(client) {
 
     console.log(`📺 Lives: ${supported.length} streamers, ${liveStreamers.length} live → ${targets.length} message(s)`);
 
-    const embed = buildLivesEmbed(liveStreamers, liveData, Date.now());
+    const updatedAt = Date.now();
+    const embed = buildLivesEmbed(liveStreamers, liveData, updatedAt);
 
     for (const target of targets) {
       try {
@@ -477,6 +479,12 @@ async function updateLivesMessage(client) {
         console.error(`❌ Lives update failed for ${target.channelId}:`, err.message);
       }
     }
+
+    await BotSync.findByIdAndUpdate(
+      "syncStatus",
+      { $set: { livesLastSyncAt: new Date(updatedAt) } },
+      { upsert: true },
+    );
   } catch (err) {
     console.error("❌ Lives update failed:", err.stack || err.message);
   }

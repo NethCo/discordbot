@@ -12,8 +12,18 @@ const { updateMemberCountChannel, setupWelcome } = require("./welcome");
 const { migrateLegacyEnvConfig } = require("./lib/guildConfig");
 const { handleMsilCommand } = require("./msil");
 const { watchMagazinePublishes, drainPendingMagazineNotifies } = require("./magazine");
+const BotSync = require("./models/BotSync");
 
 const DEFAULT_BOT_STATUS = "🍁 MSIsrael.gg";
+const PLAYER_SYNC_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const LIVES_SYNC_MAX_AGE_MS = LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000;
+
+function isStale(lastAt, maxAgeMs) {
+  if (!lastAt) return true;
+  const ts = new Date(lastAt).getTime();
+  if (!Number.isFinite(ts)) return true;
+  return Date.now() - ts >= maxAgeMs;
+}
 
 const client = new Client({
   intents: [
@@ -61,6 +71,11 @@ async function updateBotStatus() {
   client.user.setActivity(status, { type: 4 }); // Custom status
   console.log(`📢 סטטוס בוט עודכן: ${status}`);
   await updateStatusChannel(status);
+  await BotSync.findByIdAndUpdate(
+    "syncStatus",
+    { $set: { statusLastSyncAt: new Date() } },
+    { upsert: true },
+  );
 }
 
 function msUntilNextIsraelMidnight() {
@@ -148,25 +163,46 @@ client.once(Events.ClientReady, async () => {
 
     await migrateLegacyEnvConfig(client);
 
+    // Watchers first — before any catch-up sync work
+    watchPendingCharacters(client);
+    watchDMScreenshots(client);
+    watchHandledRequests(client);
+    await drainPendingMagazineNotifies(client);
+    watchMagazinePublishes(client);
+
     scheduleDailyLeaderboard(client);
 
-    await syncCharacterStats();
-    await updateLeaderboard(client);
-    await updateLivesMessage(client);
-    setInterval(() => updateLivesMessage(client), LIVES_UPDATE_INTERVAL_MINUTES * 60 * 1000);
+    const syncStatus = await BotSync.findById("syncStatus").lean();
 
-    await updateBotStatus();
+    if (isStale(syncStatus?.rankingsLastSyncAt, PLAYER_SYNC_MAX_AGE_MS)) {
+      console.log("🔄 עדכון שחקנים בסטארטאפ (עברו יותר מ-24 שעות מאז העדכון האחרון)");
+      await syncCharacterStats();
+      await updateLeaderboard(client);
+    } else {
+      console.log("⏭️ דילוג על עדכון שחקנים בסטארטאפ — עודכן לאחרונה תוך 24 שעות");
+    }
+
+    if (isStale(syncStatus?.livesLastSyncAt, LIVES_SYNC_MAX_AGE_MS)) {
+      console.log(`🔄 עדכון לייבים בסטארטאפ (עברו יותר מ-${LIVES_UPDATE_INTERVAL_MINUTES} דקות מאז העדכון האחרון)`);
+      await updateLivesMessage(client);
+    } else {
+      console.log(`⏭️ דילוג על עדכון לייבים בסטארטאפ — עודכן לאחרונה תוך ${LIVES_UPDATE_INTERVAL_MINUTES} דקות`);
+    }
+    setInterval(() => updateLivesMessage(client), LIVES_SYNC_MAX_AGE_MS);
+
+    if (isStale(syncStatus?.statusLastSyncAt, PLAYER_SYNC_MAX_AGE_MS)) {
+      console.log("🔄 עדכון סטטוס בוט בסטארטאפ (עברו יותר מ-24 שעות מאז העדכון האחרון)");
+      await updateBotStatus();
+    } else {
+      // Presence resets on reconnect; restore activity without touching the status channel.
+      const status = resolveBotStatus();
+      client.user.setActivity(status, { type: 4 });
+      console.log("⏭️ דילוג על עדכון ערוץ סטטוס בסטארטאפ — עודכן לאחרונה תוך 24 שעות");
+    }
     scheduleDailyStatusRefresh();
 
     await updateMemberCountChannel(client, { force: true });
     setupWelcome(client);
-
-    watchPendingCharacters(client);
-    watchDMScreenshots(client);
-    watchHandledRequests(client);
-
-    await drainPendingMagazineNotifies(client);
-    watchMagazinePublishes(client);
   } catch (err) {
     console.error("❌ startup failed:", err);
   }
