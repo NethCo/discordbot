@@ -1,10 +1,13 @@
 const { EmbedBuilder } = require("discord.js");
-const { WELCOME_CHANNEL_ID, MEMBER_COUNT_CHANNEL_ID, WEBSITE_URL } = require("./config");
+const { WEBSITE_URL } = require("./config");
+const { getGuildConfig, getGuildsWithMemberCount } = require("./lib/guildConfig");
 
 const MEMBER_COUNT_INTERVAL_MS = 10 * 60 * 1000;
 
-let membersFetched = false;
-let memberCountDirty = false;
+/** guildId → members already fetched into cache */
+const membersFetchedByGuild = new Set();
+/** guildIds that need a member-count channel rename */
+const dirtyGuildIds = new Set();
 let intervalStarted = false;
 
 function formatFooterDate(date = new Date()) {
@@ -24,40 +27,56 @@ function humanMemberCount(guild) {
 }
 
 async function ensureMembersCached(guild) {
-  if (membersFetched && guild.members.cache.size > 0) return;
+  if (membersFetchedByGuild.has(guild.id) && guild.members.cache.size > 0) return;
   await guild.members.fetch();
-  membersFetched = true;
+  membersFetchedByGuild.add(guild.id);
+}
+
+async function updateOneMemberCountChannel(client, cfg, { force = false } = {}) {
+  const guildId = cfg.guildId;
+  if (!force && !dirtyGuildIds.has(guildId)) return;
+
+  const channel = await client.channels.fetch(cfg.memberCountChannelId);
+  if (!channel?.guildId || channel.guildId !== guildId) {
+    console.error(`❌ ערוץ חברים לא תקין: ${cfg.memberCountChannelId} (guild ${guildId})`);
+    return;
+  }
+
+  await ensureMembersCached(channel.guild);
+  const count = humanMemberCount(channel.guild);
+  const newName = `👪 ${count} משתמשים`;
+
+  dirtyGuildIds.delete(guildId);
+  if (channel.name === newName) return;
+
+  await channel.setName(newName);
+  console.log(`✅ ערוץ חברים עודכן (${guildId}): ${newName}`);
 }
 
 async function updateMemberCountChannel(client, { force = false } = {}) {
   try {
-    if (!MEMBER_COUNT_CHANNEL_ID) return;
-    if (!force && !memberCountDirty) return;
+    const guilds = await getGuildsWithMemberCount();
+    if (!guilds.length) return;
 
-    const channel = await client.channels.fetch(MEMBER_COUNT_CHANNEL_ID);
-    if (!channel?.guildId) return;
-
-    await ensureMembersCached(channel.guild);
-    const count = humanMemberCount(channel.guild);
-    const newName = `👪 ${count} משתמשים`;
-
-    memberCountDirty = false;
-    if (channel.name === newName) return;
-
-    await channel.setName(newName);
-    console.log(`✅ ערוץ חברים עודכן: ${newName}`);
+    for (const cfg of guilds) {
+      try {
+        await updateOneMemberCountChannel(client, cfg, { force });
+      } catch (err) {
+        dirtyGuildIds.add(cfg.guildId);
+        console.error(`❌ שגיאה בעדכון ערוץ חברים (${cfg.guildId}):`, err.message);
+      }
+    }
   } catch (err) {
-    memberCountDirty = true;
-    console.error("❌ שגיאה בעדכון ערוץ חברים:", err.message);
+    console.error("❌ שגיאה בעדכון ערוצי חברים:", err.message);
   }
 }
 
-function markMemberCountDirty() {
-  memberCountDirty = true;
+function markMemberCountDirty(guildId) {
+  if (guildId) dirtyGuildIds.add(guildId);
 }
 
 function setupWelcome(client) {
-  if (!intervalStarted && MEMBER_COUNT_CHANNEL_ID) {
+  if (!intervalStarted) {
     intervalStarted = true;
     setInterval(() => {
       updateMemberCountChannel(client).catch((err) => {
@@ -67,12 +86,14 @@ function setupWelcome(client) {
   }
 
   client.on("guildMemberAdd", async (member) => {
-    markMemberCountDirty();
+    markMemberCountDirty(member.guild.id);
 
     try {
-      if (!WELCOME_CHANNEL_ID) return;
-      const channel = await client.channels.fetch(WELCOME_CHANNEL_ID);
-      if (!channel) return;
+      const cfg = await getGuildConfig(member.guild.id);
+      if (!cfg?.welcomeChannelId) return;
+
+      const channel = await client.channels.fetch(cfg.welcomeChannelId);
+      if (!channel || channel.guildId !== member.guild.id) return;
 
       await ensureMembersCached(member.guild);
       const memberNumber = humanMemberCount(member.guild);
@@ -97,8 +118,8 @@ function setupWelcome(client) {
     }
   });
 
-  client.on("guildMemberRemove", () => {
-    markMemberCountDirty();
+  client.on("guildMemberRemove", (member) => {
+    markMemberCountDirty(member.guild.id);
   });
 }
 

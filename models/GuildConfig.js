@@ -38,6 +38,15 @@ const guildConfigSchema = new mongoose.Schema({
 
   /** Where new magazine articles are announced for this guild */
   magazineChannelId: { type: String, default: null },
+
+  /** Welcome embed channel (main community guild only — set manually in DB) */
+  welcomeChannelId: { type: String, default: null },
+
+  /** Voice/text channel renamed to show human member count */
+  memberCountChannelId: { type: String, default: null },
+
+  /** Channel renamed to mirror bot custom status / holiday */
+  statusChannelId: { type: String, default: null },
 }, { timestamps: true, versionKey: false, collection: "guildconfigs" });
 
 module.exports = mongoose.model("GuildConfig", guildConfigSchema);

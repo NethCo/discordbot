@@ -1,7 +1,7 @@
 require("dotenv").config();
 const { Client, GatewayIntentBits, Partials, Events } = require("discord.js");
 const { connectDB } = require("./db");
-const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES, STATUS_CHANNEL_ID } = require("./config");
+const { DISCORD_TOKEN, LIVES_UPDATE_INTERVAL_MINUTES } = require("./config");
 const { getCurrentHoliday, getShabbatStatus } = require("./holidays");
 const { updateLeaderboard } = require("./leaderboard");
 const { syncCharacterStats } = require("./syncStats");
@@ -9,7 +9,7 @@ const { updateLivesMessage } = require("./lives");
 const { watchPendingCharacters, watchDMScreenshots, watchHandledRequests } = require("./verification");
 const { handleInteractions } = require("./interactions");
 const { updateMemberCountChannel, setupWelcome } = require("./welcome");
-const { migrateLegacyEnvConfig } = require("./lib/guildConfig");
+const { migrateLegacyEnvConfig, getGuildsWithStatusChannel } = require("./lib/guildConfig");
 const { handleMsilCommand } = require("./msil");
 const { watchMagazinePublishes, drainPendingMagazineNotifies } = require("./magazine");
 const BotSync = require("./models/BotSync");
@@ -50,19 +50,27 @@ function statusToChannelName(status) {
 }
 
 async function updateStatusChannel(status) {
-  if (!STATUS_CHANNEL_ID) return;
   try {
-    const channel = await client.channels.fetch(STATUS_CHANNEL_ID);
-    if (!channel?.setName) {
-      console.error("❌ Status channel not found or cannot be renamed");
-      return;
-    }
+    const guilds = await getGuildsWithStatusChannel();
+    if (!guilds.length) return;
+
     const newName = statusToChannelName(status);
-    if (channel.name === newName) return;
-    await channel.setName(newName);
-    console.log(`✅ ערוץ סטטוס עודכן: ${newName}`);
+    for (const cfg of guilds) {
+      try {
+        const channel = await client.channels.fetch(cfg.statusChannelId);
+        if (!channel?.setName || channel.guildId !== cfg.guildId) {
+          console.error(`❌ ערוץ סטטוס לא תקין: ${cfg.statusChannelId} (guild ${cfg.guildId})`);
+          continue;
+        }
+        if (channel.name === newName) continue;
+        await channel.setName(newName);
+        console.log(`✅ ערוץ סטטוס עודכן (${cfg.guildId}): ${newName}`);
+      } catch (err) {
+        console.error(`❌ שגיאה בעדכון ערוץ סטטוס (${cfg.guildId}):`, err.message);
+      }
+    }
   } catch (err) {
-    console.error("❌ שגיאה בעדכון ערוץ סטטוס:", err.message);
+    console.error("❌ שגיאה בעדכון ערוצי סטטוס:", err.message);
   }
 }
 
