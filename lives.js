@@ -14,7 +14,6 @@ const { fetchMessageByIds } = require("./lib/findBotMessage");
 const { getGuildsWithLives, saveLivesMessageId } = require("./lib/guildConfig");
 const BotSync = require("./models/BotSync");
 const Streamer = require("./models/Streamer");
-const User = require("./models/User");
 
 const PLATFORM_URLS = {
   twitch: "https://twitch.tv/",
@@ -304,12 +303,9 @@ async function fetchPlatformStreams(platform, userIds) {
 
 async function getStreamersForLives() {
   try {
-    const approvedUids = await User.distinct("_id", {
-      "auth.streamer_approved": true,
-    });
-    return await Streamer.find({
-      uid: { $in: [...approvedUids, WORLD_STREAMER_UID] },
-    }).lean();
+    // Match website /api/streamers?lives=true — anyone with a streamer doc
+    // (connected Twitch/Kick or world) is eligible; approval is no longer required.
+    return await Streamer.find({}).lean();
   } catch (err) {
     console.error("❌ שגיאה בטעינת סטרימרים מ-MongoDB:", err.message);
     return [];
