@@ -1,6 +1,10 @@
 const { EmbedBuilder } = require("discord.js");
 const { WEBSITE_URL } = require("./config");
-const { getGuildConfig, getGuildsWithMemberCount } = require("./lib/guildConfig");
+const {
+  getGuildConfig,
+  getGuildsWithMemberCount,
+  getGuildsWithWelcome,
+} = require("./lib/guildConfig");
 
 const MEMBER_COUNT_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -23,7 +27,10 @@ function formatFooterDate(date = new Date()) {
 }
 
 function humanMemberCount(guild) {
-  return guild.members.cache.filter(m => !m.user.bot).size;
+  const humans = guild.members.cache.filter(m => !m.user.bot).size;
+  // Cache may be incomplete before a full fetch — fall back to Discord's total.
+  if (humans > 0) return humans;
+  return guild.memberCount || 0;
 }
 
 async function ensureMembersCached(guild) {
@@ -56,7 +63,10 @@ async function updateOneMemberCountChannel(client, cfg, { force = false } = {}) 
 async function updateMemberCountChannel(client, { force = false } = {}) {
   try {
     const guilds = await getGuildsWithMemberCount();
-    if (!guilds.length) return;
+    if (!guilds.length) {
+      if (force) console.warn("⚠️ אין memberCountChannelId ב-GuildConfig — דילוג על עדכון ערוץ חברים");
+      return;
+    }
 
     for (const cfg of guilds) {
       try {
@@ -75,6 +85,33 @@ function markMemberCountDirty(guildId) {
   if (guildId) dirtyGuildIds.add(guildId);
 }
 
+async function logMemberChannelTargets() {
+  try {
+    const [welcomeGuilds, memberGuilds] = await Promise.all([
+      getGuildsWithWelcome(),
+      getGuildsWithMemberCount(),
+    ]);
+
+    if (!welcomeGuilds.length) {
+      console.warn("⚠️ אין שרתים עם welcomeChannelId — הודעות ברוך הבא לא יישלחו");
+    } else {
+      for (const cfg of welcomeGuilds) {
+        console.log(`👋 welcome (DB): guild=${cfg.guildId} channel=${cfg.welcomeChannelId}`);
+      }
+    }
+
+    if (!memberGuilds.length) {
+      console.warn("⚠️ אין שרתים עם memberCountChannelId — ערוץ חברים לא יעודכן");
+    } else {
+      for (const cfg of memberGuilds) {
+        console.log(`👪 members (DB): guild=${cfg.guildId} channel=${cfg.memberCountChannelId}`);
+      }
+    }
+  } catch (err) {
+    console.error("❌ לא ניתן לטעון הגדרות welcome/members:", err.message);
+  }
+}
+
 function setupWelcome(client) {
   if (!intervalStarted) {
     intervalStarted = true;
@@ -85,20 +122,37 @@ function setupWelcome(client) {
     }, MEMBER_COUNT_INTERVAL_MS);
   }
 
+  logMemberChannelTargets().catch(() => {});
+
   client.on("guildMemberAdd", async (member) => {
+    console.log(`👤 guildMemberAdd: ${member.user.tag} → guild ${member.guild.id}`);
     markMemberCountDirty(member.guild.id);
 
     try {
       const cfg = await getGuildConfig(member.guild.id);
-      if (!cfg?.welcomeChannelId) return;
+      if (!cfg?.welcomeChannelId) {
+        console.warn(`⚠️ אין welcomeChannelId לשרת ${member.guild.id} — דילוג על הודעת ברוך הבא`);
+        return;
+      }
 
-      const channel = await client.channels.fetch(cfg.welcomeChannelId);
-      if (!channel || channel.guildId !== member.guild.id) return;
+      const channel = await client.channels.fetch(cfg.welcomeChannelId).catch(() => null);
+      if (!channel?.isTextBased?.() || channel.guildId !== member.guild.id) {
+        console.error(
+          `❌ ערוץ ברוך הבא לא תקין: ${cfg.welcomeChannelId} (guild ${member.guild.id})`,
+        );
+        return;
+      }
 
-      await ensureMembersCached(member.guild);
+      // Best-effort cache fill — never block/fail the welcome on this.
+      try {
+        await ensureMembersCached(member.guild);
+      } catch (err) {
+        console.warn(`⚠️ לא ניתן לשלוף חברים לשרת ${member.guild.id}:`, err.message);
+      }
+
       const memberNumber = humanMemberCount(member.guild);
       const botName = client.user?.username || "MSIsrael.gg";
-      const botIcon = client.user?.displayAvatarURL({ dynamic: true });
+      const botIcon = client.user?.displayAvatarURL();
       const footerDate = formatFooterDate();
 
       const embed = new EmbedBuilder()
@@ -109,10 +163,11 @@ function setupWelcome(client) {
           `אתה החבר מספר **${memberNumber}** בשרת!\n\n` +
           `כדי להירשם לקהילה היכנס לאתר שלנו 🌐\n${WEBSITE_URL}`
         )
-        .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+        .setThumbnail(member.user.displayAvatarURL())
         .setFooter({ text: `${botName} • ${footerDate}`, iconURL: botIcon });
 
       await channel.send({ embeds: [embed] });
+      console.log(`✅ נשלחה הודעת ברוך הבא ל-${member.user.tag} בשרת ${member.guild.id}`);
     } catch (err) {
       console.error("❌ שגיאה בהודעת ברוך הבא:", err.message);
     }

@@ -49,10 +49,28 @@ function statusToChannelName(status) {
   return String(status || DEFAULT_BOT_STATUS).trim().slice(0, 100);
 }
 
+async function logStatusChannelTargets() {
+  try {
+    const guilds = await getGuildsWithStatusChannel();
+    if (!guilds.length) {
+      console.warn("⚠️ אין שרתים עם statusChannelId — ערוץ סטטוס לא יעודכן");
+      return;
+    }
+    for (const cfg of guilds) {
+      console.log(`📢 status (DB): guild=${cfg.guildId} channel=${cfg.statusChannelId}`);
+    }
+  } catch (err) {
+    console.error("❌ לא ניתן לטעון הגדרות status channel:", err.message);
+  }
+}
+
 async function updateStatusChannel(status) {
   try {
     const guilds = await getGuildsWithStatusChannel();
-    if (!guilds.length) return;
+    if (!guilds.length) {
+      console.warn("⚠️ אין statusChannelId ב-GuildConfig — דילוג על עדכון ערוץ סטטוס");
+      return;
+    }
 
     const newName = statusToChannelName(status);
     for (const cfg of guilds) {
@@ -171,7 +189,9 @@ client.once(Events.ClientReady, async () => {
 
     await migrateLegacyEnvConfig(client);
 
-    // Watchers first — before any catch-up sync work
+    // Join/leave + watchers before catch-up sync so welcomes aren't delayed
+    setupWelcome(client);
+    await logStatusChannelTargets();
     watchPendingCharacters(client);
     watchDMScreenshots(client);
     watchHandledRequests(client);
@@ -209,8 +229,9 @@ client.once(Events.ClientReady, async () => {
     }
     scheduleDailyStatusRefresh();
 
-    await updateMemberCountChannel(client, { force: true });
-    setupWelcome(client);
+    updateMemberCountChannel(client, { force: true }).catch((err) => {
+      console.error("❌ שגיאה בעדכון ערוץ חברים בסטארטאפ:", err.message);
+    });
   } catch (err) {
     console.error("❌ startup failed:", err);
   }
