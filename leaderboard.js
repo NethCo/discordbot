@@ -34,6 +34,57 @@ const RANKINGS_URLS = {
 
 const LRM = "\u200E";
 const MEDALS = ["🥇", "🥈", "🥉"];
+const MAX_LEVEL = 300;
+
+/** Below 300, more EXP ranks higher. At 300, a smaller EXP is an earlier arrival. */
+function expRankExpr() {
+  return {
+    $cond: [
+      { $gte: ["$lvl", MAX_LEVEL] },
+      { $multiply: [{ $ifNull: ["$exp", 0] }, -1] },
+      { $ifNull: ["$exp", 0] },
+    ],
+  };
+}
+
+function compareLevelRank(a, b) {
+  const lvlA = Number(a.lvl) || 0;
+  const lvlB = Number(b.lvl) || 0;
+  if (lvlA !== lvlB) return lvlB - lvlA;
+  const expA = Number(a.exp) || 0;
+  const expB = Number(b.exp) || 0;
+  if (lvlA >= MAX_LEVEL) return expA - expB;
+  return expB - expA;
+}
+
+function rankedAboveClause(lvl, exp) {
+  if (lvl >= MAX_LEVEL) {
+    return { $or: [{ lvl: { $gt: lvl } }, { lvl, exp: { $lt: exp } }] };
+  }
+  return { $or: [{ lvl: { $gt: lvl } }, { lvl, exp: { $gt: exp } }] };
+}
+
+function rankedBelowClause(lvl, exp) {
+  if (lvl >= MAX_LEVEL) {
+    return { $or: [{ lvl: { $lt: lvl } }, { lvl, exp: { $gt: exp } }] };
+  }
+  return { $or: [{ lvl: { $lt: lvl } }, { lvl, exp: { $lt: exp } }] };
+}
+
+function andFilters(base, extra) {
+  return { $and: [base, extra] };
+}
+
+async function findByLevelRank(match, { skip = 0, limit = 10 } = {}) {
+  return Character.aggregate([
+    { $match: match },
+    { $addFields: { _expRank: expRankExpr() } },
+    { $sort: { lvl: -1, _expRank: -1, _id: 1 } },
+    { $skip: skip },
+    { $limit: limit },
+    { $project: { _expRank: 0 } },
+  ]);
+}
 
 /** Characters without mode are treated as global. */
 function modeFilter(mode = "global") {
@@ -42,10 +93,7 @@ function modeFilter(mode = "global") {
 }
 
 async function getTop10(mode = "global") {
-  const docs = await Character.find(modeFilter(mode))
-    .sort({ lvl: -1, exp: -1 })
-    .limit(10)
-    .lean();
+  const docs = await findByLevelRank(modeFilter(mode), { limit: 10 });
   return docs.map((doc, i) => ({ rank: i + 1, id: doc._id.toString(), ...doc }));
 }
 
@@ -70,15 +118,9 @@ async function getCharacterRank(charData, world = null, mode = null) {
     ...modeFilter(resolvedMode),
     ...(world ? { world } : {}),
   };
-  const lvl = charData.lvl || 0;
-  const exp = charData.exp || 0;
-  const count = await Character.countDocuments({
-    ...filter,
-    $or: [
-      { lvl: { $gt: lvl } },
-      { lvl, exp: { $gt: exp } },
-    ],
-  });
+  const lvl = Number(charData.lvl) || 0;
+  const exp = Number(charData.exp) || 0;
+  const count = await Character.countDocuments(andFilters(filter, rankedAboveClause(lvl, exp)));
   return count + 1;
 }
 
@@ -123,7 +165,7 @@ async function getUserCharacters(discordId, mode = null) {
   if (mode) Object.assign(query, modeFilter(mode));
 
   const chars = await Character.find(query).lean();
-  chars.sort((a, b) => b.lvl !== a.lvl ? b.lvl - a.lvl : (b.exp || 0) - (a.exp || 0));
+  chars.sort(compareLevelRank);
   const result = chars.map((c) => ({ id: c._id.toString(), ...c }));
   return {
     status: result.length ? "ok" : "no_characters",
@@ -138,32 +180,19 @@ async function getCharactersAroundRank(charData, world = null, mode = null) {
     ...modeFilter(resolvedMode),
     ...(world ? { world } : {}),
   };
-  const lvl = charData.lvl || 0;
-  const exp = charData.exp || 0;
+  const lvl = Number(charData.lvl) || 0;
+  const exp = Number(charData.exp) || 0;
   const charId = String(charData.id || charData._id || "");
 
-  const aboveFilter = {
-    ...filter,
-    $or: [{ lvl: { $gt: lvl } }, { lvl, exp: { $gt: exp } }],
-  };
-  const belowFilter = {
-    ...filter,
-    $or: [{ lvl: { $lt: lvl } }, { lvl, exp: { $lt: exp } }],
-  };
+  const aboveFilter = andFilters(filter, rankedAboveClause(lvl, exp));
+  const belowFilter = andFilters(filter, rankedBelowClause(lvl, exp));
 
   const aboveCount = await Character.countDocuments(aboveFilter);
   const skipAbove = Math.max(0, aboveCount - 2);
 
   const [above, below] = await Promise.all([
-    Character.find(aboveFilter)
-      .sort({ lvl: -1, exp: -1, _id: 1 })
-      .skip(skipAbove)
-      .limit(2)
-      .lean(),
-    Character.find(belowFilter)
-      .sort({ lvl: -1, exp: -1, _id: 1 })
-      .limit(2)
-      .lean(),
+    findByLevelRank(aboveFilter, { skip: skipAbove, limit: 2 }),
+    findByLevelRank(belowFilter, { limit: 2 }),
   ]);
 
   const rank = aboveCount + 1;

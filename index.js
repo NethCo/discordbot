@@ -207,7 +207,10 @@ client.once(Events.ClientReady, async () => {
       await syncCharacterStats();
       await updateLeaderboard(client);
     } else {
-      console.log("⏭️ דילוג על עדכון שחקנים בסטארטאפ — עודכן לאחרונה תוך 24 שעות");
+      console.log("⏭️ דילוג על סנכרון שחקנים בסטארטאפ — עודכן לאחרונה תוך 24 שעות");
+      // Rank order can change without a Nexon sync (level 300 arrival exp).
+      // Refresh the posted message so a deploy doesn't leave the old ranking up.
+      await updateLeaderboard(client);
     }
 
     if (isStale(syncStatus?.livesLastSyncAt, LIVES_SYNC_MAX_AGE_MS)) {

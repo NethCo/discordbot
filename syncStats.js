@@ -38,10 +38,12 @@ async function syncCharacterStats() {
 
       const updates = {
         lvl: overall.lvl,
-        exp: overall.exp,
         img: overall.img,
         job: overall.job,
       };
+      // Level 300 arrival order is stored manually in exp (1 = first, 2 = second).
+      // Nexon has no further EXP at 300, so a sync must not wipe that value.
+      if (Number(overall.lvl) < 300) updates.exp = overall.exp;
       if (fameData) updates.fame = fameData.fame;
 
       await Character.updateOne({ _id: char._id }, { $set: updates });
