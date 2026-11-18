@@ -1,12 +1,15 @@
 const Character = require("./models/Character");
 const BotSync = require("./models/BotSync");
-const { fetchOverall, fetchFame } = require("./lib/nexonCharacter");
+const { fetchCharacterStats, isClassicWorld } = require("./lib/nexonCharacter");
+const { resolveCharacterMode } = require("./lib/constants");
 
 async function writeSyncStatus(status, extra = {}) {
   const update = {
     rankingsLastSyncSource: "discordbot.syncStats",
     rankingsLastSyncResult: status,
-    rankingsLastSyncAt: status === "ok" ? new Date() : undefined,
+    // Always stamp completion time so the site/bot don't look "stuck"
+    // when a few characters are missing from Nexon/ClassicRank.
+    rankingsLastSyncAt: new Date(),
     rankingsLastAttemptAt: new Date(),
     ...extra,
   };
@@ -29,41 +32,64 @@ async function syncCharacterStats() {
       if (!char.name) continue;
 
       const world = String(char.world || "").trim();
-      const [overall, fameData] = await Promise.all([
-        fetchOverall(char.name, world),
-        fetchFame(char.name, world),
-      ]);
+      const mode = resolveCharacterMode(char);
+      const stats = await fetchCharacterStats(char.name, world);
 
-      if (!overall) { missing++; continue; }
+      if (!stats?.overall) { missing++; continue; }
 
+      const { overall, fameData } = stats;
       const updates = {
         lvl: overall.lvl,
         img: overall.img,
         job: overall.job,
+        mode,
       };
-      // Level 300 arrival order is stored manually in exp (1 = first, 2 = second).
-      // Nexon has no further EXP at 300, so a sync must not wipe that value.
-      if (Number(overall.lvl) < 300) updates.exp = overall.exp;
-      if (fameData) updates.fame = fameData.fame;
+
+      if (isClassicWorld(world)) {
+        // ClassicRank has no usable EXP ladder for our rank order; keep exp at 0.
+        updates.exp = 0;
+        if (overall.lastCheckedAt) updates.lastCheckedAt = overall.lastCheckedAt;
+        if (fameData) updates.fame = fameData.fame;
+      } else {
+        // Level 300 arrival order is stored manually in exp (1 = first, 2 = second).
+        // Nexon has no further EXP at 300, so a sync must not wipe that value.
+        if (Number(overall.lvl) < 300) updates.exp = overall.exp;
+        if (fameData) updates.fame = fameData.fame;
+      }
 
       await Character.updateOne({ _id: char._id }, { $set: updates });
       updated++;
     }
 
-    const status = missing === 0 ? "ok" : "error";
+    const status = missing === 0 ? "ok" : updated > 0 ? "partial" : "error";
     await writeSyncStatus(status, {
       totalCharacters: chars.length,
       updatedCharacters: updated,
       missingCharacters: missing,
       startedAt,
       finishedAt: new Date(),
-      ...(missing > 0 ? { rankingsLastSyncError: `${missing} characters not found on Nexon` } : {}),
+      ...(missing > 0
+        ? { rankingsLastSyncError: `${missing} characters not found on Nexon/ClassicRank` }
+        : { rankingsLastSyncError: null }),
     });
     console.log(`🔄 סינכרון סטטיסטיקות הושלם: עודכן ${updated}/${chars.length} (לא נמצאו: ${missing})`);
   } catch (err) {
     console.error("❌ שגיאה בסינכרון סטטיסטיקות:", err);
     try {
-      await writeSyncStatus("error", { rankingsLastSyncError: String(err?.message || err), startedAt, finishedAt: new Date() });
+      await BotSync.findByIdAndUpdate(
+        "syncStatus",
+        {
+          $set: {
+            rankingsLastSyncSource: "discordbot.syncStats",
+            rankingsLastSyncResult: "error",
+            rankingsLastAttemptAt: new Date(),
+            rankingsLastSyncError: String(err?.message || err),
+            startedAt,
+            finishedAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
     } catch {}
   }
 }

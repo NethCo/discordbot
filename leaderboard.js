@@ -21,6 +21,12 @@ const {
   resolveLeaderboardTarget,
   saveLeaderboardMessageId,
 } = require("./lib/guildConfig");
+const {
+  GMS_WORLDS,
+  CLASSIC_WORLDS,
+  isClassicWorld,
+  resolveCharacterMode,
+} = require("./lib/constants");
 
 const LEADERBOARD_TITLES = {
   global: "Global Rankings Leaderboard",
@@ -86,10 +92,10 @@ async function findByLevelRank(match, { skip = 0, limit = 10 } = {}) {
   ]);
 }
 
-/** Characters without mode are treated as global. */
+/** Match the website: classic = Windia/Zenith, global = GMS worlds. */
 function modeFilter(mode = "global") {
-  if (mode === "classic") return { mode: "classic" };
-  return { $or: [{ mode: "global" }, { mode: { $exists: false } }, { mode: null }] };
+  if (mode === "classic") return { world: { $in: [...CLASSIC_WORLDS] } };
+  return { world: { $in: [...GMS_WORLDS] } };
 }
 
 async function getTop10(mode = "global") {
@@ -113,7 +119,7 @@ async function attachProfileUrls(characters) {
 }
 
 async function getCharacterRank(charData, world = null, mode = null) {
-  const resolvedMode = mode || charData.mode || "global";
+  const resolvedMode = mode || resolveCharacterMode(charData);
   const filter = {
     ...modeFilter(resolvedMode),
     ...(world ? { world } : {}),
@@ -141,10 +147,12 @@ async function resolveCharacterAvatar(charData) {
   try {
     const { fetchOverall } = require("./lib/nexonCharacter");
     const overall = await fetchOverall(name, world);
-    const extracted = extractCharacterImg(overall?.img) || overall?.img || null;
-    const url = characterAvatarUrl(extracted);
-    if (extracted && charData.id) {
-      Character.updateOne({ _id: charData.id }, { $set: { img: extracted } }).catch(() => {});
+    const storedImg = isClassicWorld(world)
+      ? (overall?.img || null)
+      : (extractCharacterImg(overall?.img) || overall?.img || null);
+    const url = characterAvatarUrl(storedImg);
+    if (storedImg && charData.id) {
+      Character.updateOne({ _id: charData.id }, { $set: { img: storedImg } }).catch(() => {});
     }
     return url;
   } catch {
@@ -175,7 +183,7 @@ async function getUserCharacters(discordId, mode = null) {
 }
 
 async function getCharactersAroundRank(charData, world = null, mode = null) {
-  const resolvedMode = mode || charData.mode || "global";
+  const resolvedMode = mode || resolveCharacterMode(charData);
   const filter = {
     ...modeFilter(resolvedMode),
     ...(world ? { world } : {}),
@@ -209,11 +217,16 @@ async function getCharactersAroundRank(charData, world = null, mode = null) {
 function formatLvJobWorldLine(charData, fractionDigits = 2) {
   const job = String(charData.job || "—").trim() || "—";
   const world = String(charData.world || "—").trim() || "—";
-  if (Number(charData.lvl) >= 300) {
+  if (isClassicWorld(world) || Number(charData.lvl) >= 300) {
     return `Lv. ${charData.lvl}, ${job} in ${world}`;
   }
   const pct = formatLevelExpPercent(charData.lvl, charData.exp, fractionDigits);
   return `Lv. ${charData.lvl} (${pct}), ${job} in ${world}`;
+}
+
+function formatLeaderboardLevel(c) {
+  if (isClassicWorld(c.world)) return String(c.lvl ?? "—");
+  return formatLevelWithExpPercent(c.lvl, c.exp);
 }
 
 const LEADERBOARD_UPDATE_INTERVAL_TEXT = "מתעדכן כל 24 שעות";
@@ -348,7 +361,7 @@ function buildRankRow(c, withArrow = false) {
   // My-rank: light gap on Job only (Player must stay a single unwrapped line).
   const gap = withArrow ? "\u2003" : COLUMN_GAP;
   const jobLine = `${LRM}${formatJobName(c)}${gap}`;
-  const levelLine = `${LRM}${formatLevelWithExpPercent(c.lvl, c.exp)}`;
+  const levelLine = `${LRM}${formatLeaderboardLevel(c)}`;
   const pad = (line) => [line, ...Array(Math.max(0, playerLines.length - 1)).fill(LRM)].join("\n");
 
   return {
@@ -472,9 +485,7 @@ async function resolveLeaderboardTargets(mode) {
 async function updateLeaderboardForMode(client, mode = "global") {
   const targets = await resolveLeaderboardTargets(mode);
   if (!targets.length) {
-    if (mode === "global") {
-      console.warn("⚠️ No global leaderboard channels configured");
-    }
+    console.warn(`⚠️ No ${mode} leaderboard channels configured`);
     return;
   }
 

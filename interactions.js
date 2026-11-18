@@ -15,7 +15,8 @@ const {
   LEADERBOARD_UPDATE_INTERVAL_TEXT,
 } = require("./leaderboard");
 const { updateAllAdminRequestMessages } = require("./verification");
-const { ALLOWED_WORLDS, fetchOverall, fetchFame } = require("./lib/nexonCharacter");
+const { ALLOWED_WORLDS, fetchCharacterStats, isClassicWorld } = require("./lib/nexonCharacter");
+const { resolveCharacterMode } = require("./lib/constants");
 
 const rankSelectionCache = new Map();
 
@@ -57,9 +58,10 @@ async function buildPersonalRankEmbed({ charData, neighbors, avatarUrl, client }
   return [embed];
 }
 
-async function replyWithPersonalRank(interaction, charData) {
+async function replyWithPersonalRank(interaction, charData, mode = null) {
+  const resolvedMode = mode || resolveCharacterMode(charData);
   const [neighbors, avatarUrl] = await Promise.all([
-    getCharactersAroundRank(charData),
+    getCharactersAroundRank(charData, null, resolvedMode),
     resolveCharacterAvatar(charData),
   ]);
   const embeds = await buildPersonalRankEmbed({
@@ -75,6 +77,7 @@ async function replyWithPersonalRank(interaction, charData) {
 
 async function handleMyRankRequest(interaction, discordUserId, mode = "global") {
   const result = await getUserCharacters(discordUserId, mode);
+  const modeLabel = mode === "classic" ? "classic" : "global";
   if (result.status === "no_account") {
     await interaction.editReply({
       content: `No linked account found. Sign in at **${WEBSITE_RANKINGS_URL}**`,
@@ -82,7 +85,9 @@ async function handleMyRankRequest(interaction, discordUserId, mode = "global") 
     return;
   }
   if (result.status === "no_characters") {
-    await interaction.editReply({ content: "Your account has no registered characters yet." });
+    await interaction.editReply({
+      content: `Your account has no registered ${modeLabel} characters yet.`,
+    });
     return;
   }
 
@@ -90,7 +95,7 @@ async function handleMyRankRequest(interaction, discordUserId, mode = "global") 
   saveUserRankCache(discordUserId, characters);
 
   if (characters.length === 1) {
-    await replyWithPersonalRank(interaction, characters[0]);
+    await replyWithPersonalRank(interaction, characters[0], mode);
     return;
   }
 
@@ -148,7 +153,7 @@ async function handleInteractions(client) {
 
         if (!charData) return interaction.editReply({ content: "Character not found." });
 
-        await replyWithPersonalRank(interaction, charData);
+        await replyWithPersonalRank(interaction, charData, mode);
       } catch (err) {
         console.error("rank_char error:", err);
         await interaction.editReply({ content: "Something went wrong. Please try again later." });
@@ -170,33 +175,41 @@ async function handleInteractions(client) {
         if (isApprove) {
           const safeCharName = String(req.name || "").trim();
           const safeWorld = String(req.world || "").trim();
-          const safeMode = req.mode === "classic" ? "classic" : "global";
+          const safeMode = req.mode === "classic" || isClassicWorld(safeWorld) ? "classic" : "global";
           if (!safeCharName || safeCharName.length > 12) {
             throw new Error("invalid character name length");
           }
           if (!ALLOWED_WORLDS.has(safeWorld)) {
             throw new Error("invalid world");
           }
-
-          const [overall, fameData] = await Promise.all([
-            fetchOverall(safeCharName, safeWorld),
-            fetchFame(safeCharName, safeWorld),
-          ]);
-
-          if (!overall) {
-            throw new Error("character not found on world");
+          if (safeMode === "classic" && !isClassicWorld(safeWorld)) {
+            throw new Error("invalid classic world");
+          }
+          if (safeMode === "global" && isClassicWorld(safeWorld)) {
+            throw new Error("invalid global world");
           }
 
+          const stats = await fetchCharacterStats(safeCharName, safeWorld);
+          if (!stats?.overall) {
+            throw new Error(
+              safeMode === "classic"
+                ? "character not found on ClassicRank"
+                : "character not found on world",
+            );
+          }
+
+          const { overall, fameData } = stats;
           const character = new Character({
             name: safeCharName,
             world: safeWorld,
             mode: safeMode,
             lvl: overall?.lvl ?? 0,
-            exp: overall?.exp ?? 0,
-            fame: fameData?.fame ?? 0,
+            exp: safeMode === "classic" ? 0 : (overall?.exp ?? 0),
+            fame: fameData?.fame ?? overall?.fame ?? 0,
             img: overall?.img ?? null,
             job: overall?.job ?? "",
             uid: req.uid,
+            ...(overall?.lastCheckedAt ? { lastCheckedAt: overall.lastCheckedAt } : {}),
           });
           await character.save();
 

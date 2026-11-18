@@ -11,6 +11,8 @@ const characterSchema = new mongoose.Schema({
   exp: { type: Number, default: 0 },
   fame: { type: Number, default: 0 },
   img: String,
+  /** ClassicRank scanner "Last checked" (classic characters only). */
+  lastCheckedAt: { type: Date, default: null },
 }, { timestamps: true, versionKey: false, collection: "characters" });
 
 characterSchema.index({ mode: 1, lvl: -1, exp: -1 });

@@ -137,7 +137,10 @@ function scheduleDailyStatusRefresh() {
   }, waitMs);
 }
 
-function msUntilNextIsrael20() {
+/** Winter clock: rankings sync at 19:00 Israel time (was 20:00 in summer). */
+const LEADERBOARD_SYNC_HOUR_ISRAEL = 19;
+
+function msUntilNextIsraelHour(hour = LEADERBOARD_SYNC_HOUR_ISRAEL) {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Jerusalem",
@@ -153,7 +156,7 @@ function msUntilNextIsrael20() {
   const byType = Object.fromEntries(parts.map(p => [p.type, p.value]));
   const currentIsrael = new Date(`${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}Z`);
   const target = new Date(currentIsrael);
-  target.setUTCHours(20, 0, 0, 0);
+  target.setUTCHours(hour, 0, 0, 0);
   if (target <= currentIsrael) {
     target.setUTCDate(target.getUTCDate() + 1);
   }
@@ -161,13 +164,19 @@ function msUntilNextIsrael20() {
 }
 
 function scheduleDailyLeaderboard(client) {
-  const waitMs = msUntilNextIsrael20();
+  const waitMs = msUntilNextIsraelHour(LEADERBOARD_SYNC_HOUR_ISRAEL);
   const targetTime = new Date(Date.now() + waitMs);
   console.log(`⏰ לוח דירוגים יעודכן ב-${targetTime.toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" })}`);
   setTimeout(async () => {
-    await syncCharacterStats();
-    await updateLeaderboard(client);
-    scheduleDailyLeaderboard(client);
+    try {
+      await syncCharacterStats();
+      await updateLeaderboard(client);
+    } catch (err) {
+      console.error("❌ daily leaderboard sync failed:", err);
+    } finally {
+      // Always reschedule — a thrown sync must not kill the daily loop.
+      scheduleDailyLeaderboard(client);
+    }
   }, waitMs);
 }
 
